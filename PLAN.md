@@ -10,6 +10,7 @@ Build a new Android app (new GitHub repo) that reads incoming SMS messages, dete
 - **UI:** Jetpack Compose + Material 3
 - **DI:** Hilt
 - **Database:** Room
+- **On-device AI:** Google AI Edge SDK (Gemini Nano, available on supported devices)
 - **Background:** Foreground Service (for immediate SMS processing) + WorkManager (retry failed sends)
 - **Architecture:** Single-module, MVVM with clean domain layer
 - **Min SDK:** 26 (Android 8.0), Target SDK: 35
@@ -34,7 +35,11 @@ otp-forwarder/
 │   ├── domain/
 │   │   ├── model/              # Otp, OtpType, ForwardingRule, Recipient
 │   │   ├── detection/          # OtpDetector interface + RegexOtpDetector
-│   │   ├── classification/     # OtpClassifier interface + RegexOtpClassifier
+│   │   ├── classification/     # OtpClassifier interface + implementations
+│   │   │   ├── OtpClassifier.kt           # Interface
+│   │   │   ├── GeminiOtpClassifier.kt     # Gemini Nano (AI Edge SDK)
+│   │   │   ├── KeywordOtpClassifier.kt    # Weighted keyword scoring
+│   │   │   └── TieredOtpClassifier.kt     # Orchestrator: Gemini → Keyword fallback
 │   │   ├── engine/             # RuleEngine
 │   │   └── usecase/            # ProcessIncomingSms, ForwardOtp, ManageRules
 │   ├── ui/
@@ -52,7 +57,8 @@ otp-forwarder/
 ### Domain Models
 
 - **OtpType** enum: `ALL`, `TRANSACTION`, `LOGIN`, `PARCEL_DELIVERY`, `REGISTRATION`, `PASSWORD_RESET`, `GOVERNMENT`, `UNKNOWN`
-- **Otp**: code, type, sender, originalMessage, detectedAt, confidence (0.0-1.0)
+- **ClassifierTier** enum: `GEMINI_NANO`, `KEYWORD`
+- **Otp**: code, type, sender, originalMessage, detectedAt, confidence (0.0-1.0), classifierTier
 - **Recipient**: id, name, phoneNumber, isActive
 - **ForwardingRule**: id, name, otpType (`ALL` = match any type), isEnabled, priority (lower = higher), senderFilter (optional regex on sender), bodyFilter (optional regex on message body)
 
@@ -88,19 +94,63 @@ Two-layer approach:
    - Contextual patterns (confidence 0.75): `code is 123456`
    - Bare code with keyword context (confidence 0.50): fallback
 
-### Classification (RegexOtpClassifier)
+### Classification (Two-Tier)
 
-Keyword/regex matching on full message body:
-- TRANSACTION: `transaction`, `payment`, `debit`, `credit`, `INR`, `bank`
-- LOGIN: `log in`, `sign in`, `authenticate`, `2FA`
-- PARCEL_DELIVERY: `deliver`, `shipment`, `parcel`, `tracking`, `courier`
-- REGISTRATION: `register`, `sign up`, `create account`
-- PASSWORD_RESET: `reset password`, `forgot`, `recover`
-- GOVERNMENT: `Aadhaar`, `PAN`, `tax`, `govt`
+The `OtpClassifier` interface has two implementations, orchestrated by `TieredOtpClassifier`:
 
-### ML/Embedding Evaluation
+#### Tier 1: Gemini Nano (`GeminiOtpClassifier`)
 
-**Verdict: Not for v1.** Architecture supports drop-in ML later via `OtpClassifier` interface. Ship regex, review `UNKNOWN` classifications from real usage, add ML in v2 if warranted.
+- Uses **Google AI Edge SDK** with the on-device `GenerativeModel` (AICore backend)
+- Available on **Android 14+ (SDK 34+)** on supported devices (Pixel 8+, Samsung S24+, etc.)
+- Prompt-based classification — sends the SMS body with a structured prompt:
+  ```
+  Classify this SMS into exactly one category:
+  TRANSACTION, LOGIN, PARCEL_DELIVERY, REGISTRATION,
+  PASSWORD_RESET, GOVERNMENT, or UNKNOWN.
+  Reply with only the category name.
+
+  SMS: "{message body}"
+  ```
+- Check availability at runtime via `GenerativeModel.isAvailable()`
+- Latency: ~200-500ms, acceptable since processing runs in a foreground service
+
+#### Tier 2: Weighted Keyword Scoring (`KeywordOtpClassifier`)
+
+Fallback for all devices where Gemini Nano is unavailable. Uses **weighted multi-keyword scoring** instead of naive first-match:
+
+Each category has weighted keywords (higher weight = stronger signal):
+- TRANSACTION: `transaction` (0.9), `payment` (0.8), `debit` (0.9), `credit` (0.7), `credited` (0.9), `debited` (0.9), `INR` (0.8), `Rs.` (0.8), `bank` (0.4), `account` (0.3), `a/c` (0.7), `UPI` (0.8), `NEFT` (0.7), `IMPS` (0.7)
+- LOGIN: `log in` (0.9), `sign in` (0.9), `authenticate` (0.8), `2FA` (0.9), `two-factor` (0.9), `verification code` (0.6), `login` (0.8)
+- PARCEL_DELIVERY: `deliver` (0.8), `delivered` (0.9), `shipment` (0.9), `parcel` (0.9), `tracking` (0.8), `courier` (0.9), `dispatch` (0.7), `out for delivery` (1.0), `AWB` (0.9)
+- REGISTRATION: `register` (0.8), `sign up` (0.9), `signup` (0.9), `create account` (0.9), `new account` (0.8), `welcome` (0.4)
+- PASSWORD_RESET: `reset password` (1.0), `reset your password` (1.0), `forgot` (0.7), `recover` (0.7), `change password` (0.9)
+- GOVERNMENT: `Aadhaar` (1.0), `PAN` (0.8), `tax` (0.6), `govt` (0.7), `DigiLocker` (0.9), `UMANG` (0.9), `e-filing` (0.9), `ITR` (0.9)
+
+**Scoring logic:**
+1. Scan message body (case-insensitive) against all categories
+2. Sum matched keyword weights per category
+3. Highest scoring category wins, with a **minimum threshold of 0.5** — below it, classify as UNKNOWN
+4. On tie, prefer the more specific category (fewer total keywords matched = more specific)
+
+**Sender reputation boost:** Known sender ID prefixes add +0.5 to their category:
+- `HDFCBK`, `SBIBNK`, `ICICIB`, `AXISBK`, `KOTAKB` → TRANSACTION
+- `AMZNIN`, `FKRTIN`, `SWIGGY`, `ZOMATO` → PARCEL_DELIVERY
+- `IKITWT`, `GLOGIN`, `MSFTNO` → LOGIN
+- `GOVTIN`, `AABORL`, `ITDEPT` → GOVERNMENT
+- (Expandable — users can add custom sender mappings in a future version)
+
+#### Tier Orchestration (`TieredOtpClassifier`)
+
+```
+classify(sender, body) →
+  if GeminiOtpClassifier.isAvailable() →
+    result = GeminiOtpClassifier.classify(body)
+    if result parse succeeds → return result
+    else → fall through
+  return KeywordOtpClassifier.classify(sender, body)
+```
+
+Gemini failures (timeout, garbled output, unavailable) silently fall back to keyword scoring. The selected tier is logged in `OtpLogEntity` for observability.
 
 ## Rule Engine Design
 
@@ -121,10 +171,10 @@ SMS_RECEIVED broadcast
     → OtpProcessingService (foreground, short-lived ~5s)
       → ProcessIncomingSmsUseCase:
         1. OtpDetector.detect()
-        2. OtpClassifier.classify()
+        2. TieredOtpClassifier.classify() → (OtpType, ClassifierTier)
         3. RuleEngine.evaluate()
         4. ForwardOtpUseCase → SmsManager.sendTextMessage()
-        5. Log to Room DB
+        5. Log to Room DB (including classifierTier)
         6. Show notification
       → stopSelf()
   → (on failure) RetryWorker via WorkManager
@@ -307,6 +357,13 @@ Tap a recipient to edit. Shows which rules they belong to.
 │  │ Notifications   ✗ Denied ││  ← Tap to open system settings
 │  └──────────────────────────┘│
 │                              │
+│  Classification              │
+│  ┌──────────────────────────┐│
+│  │ Active: Gemini Nano      ││  ← or "Keyword Scoring"
+│  │ Gemini Nano: Available   ││  ← or "Unavailable (device
+│  │                          ││     not supported)"
+│  └──────────────────────────┘│
+│                              │
 │  Forwarding                  │
 │  ┌──────────────────────────┐│
 │  │ Include original message ││
@@ -405,15 +462,29 @@ Run ./gradlew assembleDebug after each major file. Fix errors before moving on. 
 **What to build:**
 - `OtpDetector` interface with `detect(sender: String, body: String): Otp?`
 - `RegexOtpDetector` implementation with two-layer approach: keyword pre-filter + regex extraction with confidence levels (0.95, 0.75, 0.50)
-- `OtpClassifier` interface with `classify(message: String): OtpType`
-- `RegexOtpClassifier` implementation with keyword matching per type (see plan for keyword lists)
-- Unit tests for both: test each OTP type classification, test confidence levels, test edge cases
+- `ClassifierTier` enum: `GEMINI_NANO`, `KEYWORD`
+- `OtpClassifier` interface with `suspend fun classify(sender: String, body: String): Pair<OtpType, ClassifierTier>`
+- `GeminiOtpClassifier`: uses Google AI Edge SDK `GenerativeModel` with structured prompt, checks availability at runtime
+- `KeywordOtpClassifier`: weighted multi-keyword scoring with sender reputation boost (see keyword weights and sender mappings in plan)
+- `TieredOtpClassifier`: orchestrator that tries Gemini first, falls back to keyword scoring on failure/unavailability
+- Add `com.google.ai.edge:generative-ai` dependency to version catalog
+- Unit tests for detection (confidence levels, edge cases) and keyword classifier (each OTP type, scoring, sender boost, ties, threshold)
 
 **Prompt:**
 ```
 Read PLAN.md and CLAUDE.md. Implement Phase 3: OTP Detection & Classification.
 
-Create OtpDetector interface and RegexOtpDetector with two-layer detection: keyword pre-filter (otp, code, verify, pin, one-time, passcode) then regex extraction with confidence levels (0.95 for explicit "OTP is 123456", 0.75 for "code is 123456", 0.50 for bare code with keyword context). Create OtpClassifier interface and RegexOtpClassifier with keyword matching for each OtpType per the plan. Write unit tests for both - cover each OTP type, confidence levels, and edge cases.
+Create OtpDetector interface and RegexOtpDetector with two-layer detection: keyword pre-filter (otp, code, verify, pin, one-time, passcode) then regex extraction with confidence levels (0.95 for explicit "OTP is 123456", 0.75 for "code is 123456", 0.50 for bare code with keyword context).
+
+Create the two-tier classification system:
+1. OtpClassifier interface with `suspend fun classify(sender: String, body: String): Pair<OtpType, ClassifierTier>`
+2. GeminiOtpClassifier — uses Google AI Edge SDK GenerativeModel to prompt Gemini Nano for classification. Check isAvailable() at runtime. Parse the response to an OtpType, falling through on any failure.
+3. KeywordOtpClassifier — weighted multi-keyword scoring per the plan: each keyword has a weight, scores are summed per category, highest wins above 0.5 threshold. Add sender reputation boost (+0.5) for known sender ID prefixes.
+4. TieredOtpClassifier — tries Gemini first, silent fallback to keyword on failure/unavailability. Returns the tier used alongside the classification.
+
+Add ClassifierTier enum (GEMINI_NANO, KEYWORD) to domain/model/. Add the classifierTier field to the Otp model. Add com.google.ai.edge:generative-ai to the version catalog.
+
+Write unit tests for RegexOtpDetector and KeywordOtpClassifier. Cover each OTP type, scoring logic, sender reputation boost, tie-breaking, minimum threshold, and edge cases.
 
 Run ./gradlew assembleDebug and ./gradlew test after changes. Fix errors before moving on. Commit when done.
 ```
@@ -428,7 +499,7 @@ Run ./gradlew assembleDebug and ./gradlew test after changes. Fix errors before 
 - Deduplication: same recipient across multiple rules only gets one forward
 - Priority ordering: specific type rules before ALL, then by priority number
 - `ForwardOtpUseCase`: takes Otp + recipient, sends SMS via `SmsManager.sendTextMessage()`
-- `ProcessIncomingSmsUseCase`: orchestrates detect → classify → evaluate rules → forward → log to DB
+- `ProcessIncomingSmsUseCase`: orchestrates detect → classify (via TieredOtpClassifier) → evaluate rules → forward → log to DB (including classifierTier)
 - Unit tests for RuleEngine: test type matching, filter matching, deduplication, priority ordering
 
 **Prompt:**
@@ -472,7 +543,7 @@ Run ./gradlew assembleDebug after changes. Fix errors before moving on. Commit w
 - **Add/Edit Rule screen**: Form with rule name, OTP type dropdown (ALL + all types), multi-select recipient checklist, `[ + Add new recipient ]` button (opens inline bottom sheet to create recipient), priority field, sender regex field, body regex field. Save button.
 - **Recipients screen**: LazyColumn of recipient cards showing name, active toggle, phone number, associated rule names. FAB to add. Tap to edit.
 - **Add/Edit Recipient screen**: Form with name, phone number, multi-select rule checklist, `[ + Add new rule ]` button (navigates to Add Rule screen with this recipient pre-checked). Save button.
-- **Settings screen**: Permission status list (tap denied to open system settings), "Include original message" toggle, app version, GitHub link.
+- **Settings screen**: Permission status list (tap denied to open system settings), classification status section (shows active tier — "Gemini Nano" or "Keyword Scoring" — and Gemini Nano availability), "Include original message" toggle, app version, GitHub link.
 - **Permission onboarding screen**: Shown on first launch when permissions not granted. Lists required permissions with Grant button.
 - ViewModels for each screen with Hilt `@HiltViewModel`
 
@@ -486,7 +557,7 @@ Build all screens:
 3. Add/Edit Rule: name, OTP type dropdown, multi-select recipient checklist with "Add new recipient" (inline bottom sheet), priority, sender regex, body regex, save button.
 4. Recipients list: cards with name/toggle/phone/rules, FAB to add, tap to edit.
 5. Add/Edit Recipient: name, phone, multi-select rule checklist with "Add new rule" (navigates to Add Rule with recipient pre-checked), save button.
-6. Settings: permission status, include original message toggle, about section.
+6. Settings: permission status, classification status (active tier + Gemini Nano availability), include original message toggle, about section.
 7. Permission onboarding: first launch flow.
 
 Create @HiltViewModel for each screen. Run ./gradlew assembleDebug after each screen. Fix errors before moving on. Commit when done.
