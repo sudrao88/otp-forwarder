@@ -36,11 +36,11 @@ otp-forwarder/
 │   │   ├── detection/          # OtpDetector interface + RegexOtpDetector
 │   │   ├── classification/     # OtpClassifier interface + RegexOtpClassifier
 │   │   ├── engine/             # RuleEngine
-│   │   └── usecase/            # ProcessIncomingSms, ForwardOtp, ManageRules, GetHistory
+│   │   └── usecase/            # ProcessIncomingSms, ForwardOtp, ManageRules
 │   ├── ui/
 │   │   ├── navigation/         # NavGraph
 │   │   ├── theme/              # Material 3 theme
-│   │   ├── screen/             # dashboard/, rules/, recipients/, history/, settings/
+│   │   ├── screen/             # home/, rules/, recipients/, settings/
 │   │   └── component/          # Shared composables
 │   └── util/                   # NotificationHelper, PermissionHelper
 ├── gradle/libs.versions.toml   # Version catalog
@@ -51,23 +51,30 @@ otp-forwarder/
 
 ### Domain Models
 
-- **OtpType** enum: `TRANSACTION`, `LOGIN`, `PARCEL_DELIVERY`, `REGISTRATION`, `PASSWORD_RESET`, `GOVERNMENT`, `UNKNOWN`
+- **OtpType** enum: `ALL`, `TRANSACTION`, `LOGIN`, `PARCEL_DELIVERY`, `REGISTRATION`, `PASSWORD_RESET`, `GOVERNMENT`, `UNKNOWN`
 - **Otp**: code, type, sender, originalMessage, detectedAt, confidence (0.0-1.0)
 - **Recipient**: id, name, phoneNumber, isActive
-- **ForwardingRule**: id, name, otpType (null = catch-all), recipientId, isEnabled, priority (lower = higher), senderFilter (optional regex)
+- **ForwardingRule**: id, name, otpType (`ALL` = match any type), isEnabled, priority (lower = higher), senderFilter (optional regex on sender), bodyFilter (optional regex on message body)
 
 ### Room Entities
 
 - `recipients` table
-- `forwarding_rules` table (FK to recipients, indexed on recipientId and priority)
-- `otp_log` table (denormalized with forwarding result info)
+- `forwarding_rules` table (indexed on priority)
+- `rule_recipient_cross_ref` table (ruleId FK, recipientId FK — many-to-many join table)
+- `otp_log` table (denormalized with forwarding result info, auto-pruned beyond 12 hours)
 
 ### Key Query
 
 ```sql
-SELECT * FROM forwarding_rules 
-WHERE isEnabled = 1 AND (otpType = :otpType OR otpType IS NULL)
-ORDER BY CASE WHEN otpType IS NULL THEN 1 ELSE 0 END, priority ASC
+SELECT r.*, GROUP_CONCAT(rec.name) as recipientNames
+FROM forwarding_rules r
+JOIN rule_recipient_cross_ref xref ON r.id = xref.ruleId
+JOIN recipients rec ON xref.recipientId = rec.id
+WHERE r.isEnabled = 1 
+  AND rec.isActive = 1
+  AND (r.otpType = 'ALL' OR r.otpType = :otpType)
+GROUP BY r.id
+ORDER BY CASE WHEN r.otpType = 'ALL' THEN 1 ELSE 0 END, r.priority ASC
 ```
 
 ## OTP Detection & Classification Strategy
@@ -98,10 +105,13 @@ Keyword/regex matching on full message body:
 ## Rule Engine Design
 
 - Rules are non-exclusive: OTP can match multiple rules → forwarded to multiple recipients
-- Deduplication per-recipient
-- Optional `senderFilter` regex on rules
+- Each rule maps to multiple recipients (many-to-many)
+- Deduplication per-recipient across all matched rules
+- Optional `senderFilter` regex on SMS sender address
+- Optional `bodyFilter` regex on SMS message body
+- Both filters must match if both are set (AND logic)
 - Priority as tiebreaker within same specificity level
-- `otpType = null` means catch-all rule
+- `otpType = ALL` means match any OTP type
 
 ## Processing Pipeline
 
@@ -120,30 +130,384 @@ SMS_RECEIVED broadcast
   → (on failure) RetryWorker via WorkManager
 ```
 
+## Screen Layouts
+
+### Navigation: Bottom Nav Bar (4 tabs)
+
+```
+[ Home ]  [ Rules ]  [ Recipients ]  [ Settings ]
+```
+
+---
+
+### Home Screen
+
+Shows OTPs forwarded in the last 12 hours. Primary surface of the app.
+
+```
+┌──────────────────────────────┐
+│  OTP Forwarder         [ON]  │  ← Top bar with master enable/disable toggle
+├──────────────────────────────┤
+│                              │
+│  Today                       │  ← Section header (relative date)
+│  ┌──────────────────────────┐│
+│  │ ● HDFC Bank        2m ago││  ← Sender + relative time
+│  │   Code: 482910           ││  ← Extracted OTP code
+│  │   LOGIN → Mom, Dad       ││  ← OTP type → forwarded recipients
+│  │   ✓ Sent                 ││  ← Status (Sent / Failed / Retrying)
+│  ├──────────────────────────┤│
+│  │ ● Amazon            1h ago│
+│  │   Code: 7731             ││
+│  │   PARCEL → Mom           ││
+│  │   ✓ Sent                 ││
+│  └──────────────────────────┘│
+│                              │
+│  Yesterday                   │  ← Only if within 12h window
+│  ┌──────────────────────────┐│
+│  │ ● SBI             11h ago││
+│  │   Code: 339201           ││
+│  │   TRANSACTION → Dad      ││
+│  │   ✗ Failed               ││  ← Tap to retry
+│  └──────────────────────────┘│
+│                              │
+│  ─ ─ ─ empty state ─ ─ ─    │  ← When no OTPs in last 12h:
+│  "No OTPs forwarded in the   │    illustration + message
+│   last 12 hours"             │
+│                              │
+├──────────────────────────────┤
+│ [ Home ]  [Rules] [Recip] [⚙]│
+└──────────────────────────────┘
+```
+
+---
+
+### Rules Screen
+
+List of forwarding rules with FAB to add new ones. Tap a rule to edit.
+
+```
+┌──────────────────────────────┐
+│  Forwarding Rules            │
+├──────────────────────────────┤
+│                              │
+│  ┌──────────────────────────┐│
+│  │ Bank OTPs           [ON] ││  ← Rule name + enable toggle
+│  │ TRANSACTION → Mom, Dad   ││  ← OTP type → recipients
+│  │ Priority: 1              ││
+│  ├──────────────────────────┤│
+│  │ All Login OTPs      [ON] ││
+│  │ LOGIN → Dad              ││
+│  │ Priority: 2              ││
+│  ├──────────────────────────┤│
+│  │ Catch-all          [OFF] ││
+│  │ ALL → Mom                ││
+│  │ Priority: 10             ││
+│  └──────────────────────────┘│
+│                              │
+│                         [+]  │  ← FAB to add rule
+├──────────────────────────────┤
+│ [Home]  [ Rules ] [Recip] [⚙]│
+└──────────────────────────────┘
+```
+
+**Add/Edit Rule (bottom sheet or new screen):**
+
+```
+┌──────────────────────────────┐
+│  ← Add Rule                  │
+├──────────────────────────────┤
+│                              │
+│  Rule Name                   │
+│  [ Bank OTPs               ]│
+│                              │
+│  OTP Type                    │
+│  [ TRANSACTION          ▼  ]│  ← Dropdown: ALL, TRANSACTION, LOGIN, etc.
+│                              │
+│  Recipients                  │
+│  [✓] Mom                     │  ← Multi-select checklist
+│  [✓] Dad                     │
+│  [ ] Sister                  │
+│  [ + Add new recipient ]     │  ← Opens add recipient bottom sheet inline
+│                              │
+│  Priority                    │
+│  [ 1                       ]│
+│                              │
+│  Filters (optional)          │
+│  Sender regex                │
+│  [ HDFCBK.*              ]│  ← Match on SMS sender
+│  Body regex                  │
+│  [ .*credited.*           ]│  ← Match on SMS body
+│                              │
+│         [ Save Rule ]        │
+└──────────────────────────────┘
+```
+
+---
+
+### Recipients Screen
+
+Tap a recipient to edit. Shows which rules they belong to.
+
+```
+┌──────────────────────────────┐
+│  Recipients                  │
+├──────────────────────────────┤
+│                              │
+│  ┌──────────────────────────┐│
+│  │ Mom                 [ON] ││  ← Name + active toggle
+│  │ +91 98765 43210          ││  ← Phone number
+│  │ Rules: Bank OTPs, Catch… ││  ← Associated rules summary
+│  ├──────────────────────────┤│
+│  │ Dad                 [ON] ││
+│  │ +91 98765 43211          ││
+│  │ Rules: Bank OTPs, Login… ││
+│  └──────────────────────────┘│
+│                              │
+│                         [+]  │  ← FAB to add recipient
+├──────────────────────────────┤
+│ [Home]  [Rules]  [ Recip ] [⚙]│
+└──────────────────────────────┘
+```
+
+**Add/Edit Recipient (bottom sheet or new screen):**
+
+```
+┌──────────────────────────────┐
+│  ← Edit Recipient            │
+├──────────────────────────────┤
+│  Name                        │
+│  [ Mom                     ]│
+│                              │
+│  Phone Number                │
+│  [ +91 98765 43210        ]│
+│                              │
+│  Assigned Rules              │
+│  [✓] Bank OTPs              │  ← Multi-select checklist
+│  [ ] Login OTPs             │
+│  [✓] Catch-all              │
+│  [ + Add new rule ]          │  ← Navigates to Add Rule screen
+│                              │    with this recipient pre-checked
+│       [ Save Recipient ]     │
+└──────────────────────────────┘
+```
+
+---
+
+### Settings Screen
+
+```
+┌──────────────────────────────┐
+│  Settings                    │
+├──────────────────────────────┤
+│                              │
+│  Permissions                 │
+│  ┌──────────────────────────┐│
+│  │ Receive SMS     ✓ Granted││
+│  │ Send SMS        ✓ Granted││
+│  │ Notifications   ✗ Denied ││  ← Tap to open system settings
+│  └──────────────────────────┘│
+│                              │
+│  Forwarding                  │
+│  ┌──────────────────────────┐│
+│  │ Include original message ││
+│  │ in forwarded SMS    [ON] ││
+│  └──────────────────────────┘│
+│                              │
+│  About                       │
+│  ┌──────────────────────────┐│
+│  │ Version 1.0.0            ││
+│  │ View on GitHub →         ││
+│  └──────────────────────────┘│
+│                              │
+├──────────────────────────────┤
+│ [Home]  [Rules] [Recip]  [⚙] │
+└──────────────────────────────┘
+```
+
+---
+
+### First Launch / Permission Onboarding
+
+Shown once before the app is usable.
+
+```
+┌──────────────────────────────┐
+│                              │
+│       📱 OTP Forwarder       │
+│                              │
+│  This app needs permission   │
+│  to read and send SMS to     │
+│  forward your OTPs.          │
+│                              │
+│  ○ Receive SMS               │
+│  ○ Send SMS                  │
+│  ○ Notifications             │
+│                              │
+│    [ Grant Permissions ]     │
+│                              │
+└──────────────────────────────┘
+```
+
 ## Implementation Phases
 
+Each phase should be run in a **new conversation** (`/clear` or new terminal). Copy the prompt below into Claude Code.
+
+---
+
 ### Phase 1: Project Skeleton ← START HERE
-- Create project, configure Gradle with version catalog, set up Hilt, Compose theme, navigation scaffold
-- Git init, push to GitHub
+
+**What to build:**
+- Android project with Gradle Kotlin DSL and version catalog (`gradle/libs.versions.toml`)
+- All dependencies: Compose BOM, Material 3, Hilt, Room, Navigation Compose, WorkManager
+- `OtpForwarderApp.kt` application class with `@HiltAndroidApp`
+- `MainActivity.kt` with `@AndroidEntryPoint`, sets Compose content
+- Material 3 theme (`ui/theme/`)
+- Bottom navigation scaffold with 4 tabs: Home, Rules, Recipients, Settings
+- Placeholder composable screen for each tab
+- `AndroidManifest.xml` with application and activity declaration
+- Verify `./gradlew assembleDebug` passes
+
+**Prompt:**
+```
+Read PLAN.md and CLAUDE.md. Implement Phase 1: Project Skeleton.
+
+Create the full Android project structure from scratch. Set up Gradle with Kotlin DSL and a version catalog (gradle/libs.versions.toml) for all dependencies: Compose BOM, Material 3, Hilt, Room, Navigation Compose, WorkManager. Create the Application class with @HiltAndroidApp, MainActivity with @AndroidEntryPoint, Material 3 theme, and a bottom navigation scaffold with 4 tabs (Home, Rules, Recipients, Settings) each with a placeholder composable. Set up AndroidManifest.xml.
+
+Run ./gradlew assembleDebug after each major file to catch errors early. Fix any errors before moving on. Commit when done.
+```
+
+---
 
 ### Phase 2: Data Layer
-- Room entities, DAOs, database, repositories, mappers
+
+**What to build:**
+- Domain models: `OtpType` enum (with `ALL`), `Otp`, `Recipient`, `ForwardingRule`
+- Room entities: `RecipientEntity`, `ForwardingRuleEntity`, `RuleRecipientCrossRef`, `OtpLogEntity`
+- Room DAOs: `RecipientDao`, `ForwardingRuleDao`, `OtpLogDao` with the key query from the plan
+- `AppDatabase` with all entities and type converters
+- Repository interfaces in `domain/` and implementations in `data/repository/`
+- Entity ↔ domain mappers in `data/mapper/`
+- Hilt module to provide database and DAOs
+
+**Prompt:**
+```
+Read PLAN.md and CLAUDE.md. Implement Phase 2: Data Layer.
+
+Create domain models: OtpType enum (ALL, TRANSACTION, LOGIN, PARCEL_DELIVERY, REGISTRATION, PASSWORD_RESET, GOVERNMENT, UNKNOWN), Otp, Recipient, ForwardingRule (with senderFilter and bodyFilter). Create Room entities: RecipientEntity, ForwardingRuleEntity, RuleRecipientCrossRef (many-to-many join table), OtpLogEntity (auto-pruned beyond 12 hours). Create DAOs with the key query from PLAN.md. Create AppDatabase, repository interfaces and implementations, entity-to-domain mappers, and a Hilt module for DI.
+
+Run ./gradlew assembleDebug after each major file. Fix errors before moving on. Commit when done.
+```
+
+---
 
 ### Phase 3: OTP Detection & Classification
-- `OtpDetector` interface + `RegexOtpDetector`
-- `OtpClassifier` interface + `RegexOtpClassifier`
+
+**What to build:**
+- `OtpDetector` interface with `detect(sender: String, body: String): Otp?`
+- `RegexOtpDetector` implementation with two-layer approach: keyword pre-filter + regex extraction with confidence levels (0.95, 0.75, 0.50)
+- `OtpClassifier` interface with `classify(message: String): OtpType`
+- `RegexOtpClassifier` implementation with keyword matching per type (see plan for keyword lists)
+- Unit tests for both: test each OTP type classification, test confidence levels, test edge cases
+
+**Prompt:**
+```
+Read PLAN.md and CLAUDE.md. Implement Phase 3: OTP Detection & Classification.
+
+Create OtpDetector interface and RegexOtpDetector with two-layer detection: keyword pre-filter (otp, code, verify, pin, one-time, passcode) then regex extraction with confidence levels (0.95 for explicit "OTP is 123456", 0.75 for "code is 123456", 0.50 for bare code with keyword context). Create OtpClassifier interface and RegexOtpClassifier with keyword matching for each OtpType per the plan. Write unit tests for both - cover each OTP type, confidence levels, and edge cases.
+
+Run ./gradlew assembleDebug and ./gradlew test after changes. Fix errors before moving on. Commit when done.
+```
+
+---
 
 ### Phase 4: Rule Engine
-- `RuleEngine.evaluate()`, `ForwardOtpUseCase`, `ProcessIncomingSmsUseCase`
+
+**What to build:**
+- `RuleEngine` class: takes an `Otp`, queries matching rules, returns list of `(ForwardingRule, List<Recipient>)` pairs
+- Matching logic: otpType match (or ALL), senderFilter regex, bodyFilter regex, AND logic for both filters
+- Deduplication: same recipient across multiple rules only gets one forward
+- Priority ordering: specific type rules before ALL, then by priority number
+- `ForwardOtpUseCase`: takes Otp + recipient, sends SMS via `SmsManager.sendTextMessage()`
+- `ProcessIncomingSmsUseCase`: orchestrates detect → classify → evaluate rules → forward → log to DB
+- Unit tests for RuleEngine: test type matching, filter matching, deduplication, priority ordering
+
+**Prompt:**
+```
+Read PLAN.md and CLAUDE.md. Implement Phase 4: Rule Engine.
+
+Create RuleEngine that evaluates an Otp against forwarding rules: match on otpType (or ALL), apply senderFilter and bodyFilter regex (AND logic if both set), deduplicate recipients across matched rules, order by specificity then priority. Create ForwardOtpUseCase (sends SMS via SmsManager) and ProcessIncomingSmsUseCase (orchestrates: detect → classify → evaluate rules → forward → log to Room DB). Write unit tests for RuleEngine covering type matching, filter matching, deduplication, and priority ordering.
+
+Run ./gradlew assembleDebug and ./gradlew test after changes. Fix errors before moving on. Commit when done.
+```
+
+---
 
 ### Phase 5: Android Integration
-- Manifest permissions, `SmsReceiver`, `OtpProcessingService`
-- `NotificationHelper`, `PermissionHelper`, `RetryWorker`
+
+**What to build:**
+- `AndroidManifest.xml` permissions: `RECEIVE_SMS`, `SEND_SMS`, `POST_NOTIFICATIONS`
+- `SmsReceiver` BroadcastReceiver: registered for `SMS_RECEIVED`, uses `goAsync()`, extracts PDUs, starts foreground service
+- `OtpProcessingService` foreground service: short-lived (~5s), calls `ProcessIncomingSmsUseCase`, then `stopSelf()`
+- `NotificationHelper`: creates notification channel, shows forwarding result notifications
+- `PermissionHelper`: checks and requests runtime permissions
+- `RetryWorker` (WorkManager): retries failed SMS forwards with exponential backoff
+- Register receiver, service, and worker in manifest
+
+**Prompt:**
+```
+Read PLAN.md and CLAUDE.md. Implement Phase 5: Android Integration.
+
+Add manifest permissions (RECEIVE_SMS, SEND_SMS, POST_NOTIFICATIONS). Create SmsReceiver BroadcastReceiver that listens for SMS_RECEIVED, uses goAsync(), extracts PDUs, and starts the foreground service. Create OtpProcessingService as a short-lived foreground service that calls ProcessIncomingSmsUseCase then stopSelf(). Create NotificationHelper (channel setup + forwarding result notifications), PermissionHelper (runtime permission checks/requests), and RetryWorker (WorkManager with exponential backoff for failed forwards). Register everything in AndroidManifest.xml.
+
+Run ./gradlew assembleDebug after changes. Fix errors before moving on. Commit when done.
+```
+
+---
 
 ### Phase 6: Compose UI
-- Dashboard, Recipients, Rules (CRUD), History, Settings
-- Permission onboarding flow
+
+**What to build:**
+- **Home screen**: LazyColumn showing OTPs forwarded in last 12h, grouped by relative date (Today/Yesterday). Each card shows sender, relative time, OTP code, type, forwarded recipients, status (Sent/Failed/Retrying). Tap failed to retry. Master enable/disable toggle in top bar. Empty state when no OTPs.
+- **Rules screen**: LazyColumn of rule cards showing name, enable toggle, OTP type, assigned recipient names, priority. FAB to add. Tap to edit.
+- **Add/Edit Rule screen**: Form with rule name, OTP type dropdown (ALL + all types), multi-select recipient checklist, `[ + Add new recipient ]` button (opens inline bottom sheet to create recipient), priority field, sender regex field, body regex field. Save button.
+- **Recipients screen**: LazyColumn of recipient cards showing name, active toggle, phone number, associated rule names. FAB to add. Tap to edit.
+- **Add/Edit Recipient screen**: Form with name, phone number, multi-select rule checklist, `[ + Add new rule ]` button (navigates to Add Rule screen with this recipient pre-checked). Save button.
+- **Settings screen**: Permission status list (tap denied to open system settings), "Include original message" toggle, app version, GitHub link.
+- **Permission onboarding screen**: Shown on first launch when permissions not granted. Lists required permissions with Grant button.
+- ViewModels for each screen with Hilt `@HiltViewModel`
+
+**Prompt:**
+```
+Read PLAN.md and CLAUDE.md. Implement Phase 6: Compose UI. Refer to the Screen Layouts section in PLAN.md for exact layout specs.
+
+Build all screens:
+1. Home: LazyColumn of OTPs from last 12h, grouped by date, each card shows sender/time/code/type/recipients/status, tap failed to retry, master on/off toggle in top bar, empty state.
+2. Rules list: cards with name/toggle/type/recipients/priority, FAB to add, tap to edit.
+3. Add/Edit Rule: name, OTP type dropdown, multi-select recipient checklist with "Add new recipient" (inline bottom sheet), priority, sender regex, body regex, save button.
+4. Recipients list: cards with name/toggle/phone/rules, FAB to add, tap to edit.
+5. Add/Edit Recipient: name, phone, multi-select rule checklist with "Add new rule" (navigates to Add Rule with recipient pre-checked), save button.
+6. Settings: permission status, include original message toggle, about section.
+7. Permission onboarding: first launch flow.
+
+Create @HiltViewModel for each screen. Run ./gradlew assembleDebug after each screen. Fix errors before moving on. Commit when done.
+```
+
+---
 
 ### Phase 7: Polish & Release
-- Error handling, ProGuard rules, GitHub Actions CI
-- README, tag v1.0.0, release APK
+
+**What to build:**
+- Error handling: try/catch around SMS send, graceful handling of missing permissions, invalid regex in filters
+- ProGuard/R8 rules for Room, Hilt, Kotlin serialization
+- GitHub Actions CI workflow: build on push/PR, run tests, upload debug APK as artifact
+- README.md with app description, screenshots placeholder, build instructions, permissions explanation
+- Tag `v1.0.0`, build release APK
+
+**Prompt:**
+```
+Read PLAN.md and CLAUDE.md. Implement Phase 7: Polish & Release.
+
+Add error handling: try/catch around SMS sends, graceful handling of missing permissions, invalid regex in rule filters. Add ProGuard/R8 rules for Room, Hilt, and Kotlin serialization. Create .github/workflows/ci.yml (build + test on push/PR, upload debug APK artifact). Create README.md with app description, feature list, build instructions, and permissions explanation. Verify everything builds cleanly with ./gradlew assembleDebug and ./gradlew test.
+
+Commit when done.
+```
