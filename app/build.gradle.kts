@@ -74,4 +74,11 @@ dependencies {
 
     // WorkManager
     implementation(libs.workmanager)
+
+    // On-device generative AI (Gemini Nano)
+    implementation(libs.ai.edge.generative.ai)
+
+    // Testing
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

@@ -1,6 +1,7 @@
 package com.otpforwarder.data.mapper
 
 import com.otpforwarder.data.local.OtpLogEntity
+import com.otpforwarder.domain.model.ClassifierTier
 import com.otpforwarder.domain.model.OtpType
 import java.time.Instant
 
@@ -12,6 +13,7 @@ data class OtpLogEntry(
     val originalMessage: String,
     val detectedAt: Instant,
     val confidence: Double,
+    val classifierTier: ClassifierTier,
     val ruleName: String,
     val recipientNames: List<String>,
     val status: String,
@@ -26,6 +28,7 @@ fun OtpLogEntity.toDomain(): OtpLogEntry = OtpLogEntry(
     originalMessage = originalMessage,
     detectedAt = Instant.ofEpochMilli(detectedAt),
     confidence = confidence,
+    classifierTier = ClassifierTier.valueOf(classifierTier),
     ruleName = ruleName,
     recipientNames = recipientNames.split(",").map { it.trim() },
     status = status,
@@ -40,6 +43,7 @@ fun OtpLogEntry.toEntity(): OtpLogEntity = OtpLogEntity(
     originalMessage = originalMessage,
     detectedAt = detectedAt.toEpochMilli(),
     confidence = confidence,
+    classifierTier = classifierTier.name,
     ruleName = ruleName,
     recipientNames = recipientNames.joinToString(", "),
     status = status,
