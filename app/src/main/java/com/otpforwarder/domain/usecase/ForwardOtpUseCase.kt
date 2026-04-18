@@ -1,5 +1,6 @@
 package com.otpforwarder.domain.usecase
 
+import com.otpforwarder.data.settings.SettingsRepository
 import com.otpforwarder.domain.model.Otp
 import com.otpforwarder.domain.model.Recipient
 import com.otpforwarder.domain.sms.SmsSender
@@ -10,11 +11,13 @@ import javax.inject.Singleton
  * Forwards a detected [Otp] to a single [Recipient] via the configured [SmsSender].
  *
  * The outgoing message carries the extracted code up front so it renders in SMS
- * previews, followed by the original message for full context.
+ * previews. The original message is appended for context when
+ * [SettingsRepository.isIncludeOriginalMessage] is enabled.
  */
 @Singleton
 class ForwardOtpUseCase @Inject constructor(
-    private val smsSender: SmsSender
+    private val smsSender: SmsSender,
+    private val settings: SettingsRepository
 ) {
 
     operator fun invoke(otp: Otp, recipient: Recipient): Boolean =
@@ -23,6 +26,8 @@ class ForwardOtpUseCase @Inject constructor(
     private fun buildMessage(otp: Otp): String = buildString {
         append("[").append(otp.type.name).append("] ")
         append(otp.sender).append(": ").append(otp.code)
-        append("\n\n").append(otp.originalMessage)
+        if (settings.isIncludeOriginalMessage()) {
+            append("\n\n").append(otp.originalMessage)
+        }
     }
 }

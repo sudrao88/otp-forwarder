@@ -7,6 +7,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.ServiceCompat
+import com.otpforwarder.data.settings.SettingsRepository
 import com.otpforwarder.domain.usecase.ProcessIncomingSmsUseCase
 import com.otpforwarder.util.NotificationHelper
 import com.otpforwarder.worker.RetryWorker
@@ -35,6 +36,7 @@ class OtpProcessingService : Service() {
 
     @Inject lateinit var processIncomingSms: ProcessIncomingSmsUseCase
     @Inject lateinit var notificationHelper: NotificationHelper
+    @Inject lateinit var settings: SettingsRepository
 
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Default + job)
@@ -51,6 +53,10 @@ class OtpProcessingService : Service() {
         val sender = intent?.getStringExtra(EXTRA_SENDER)
         val body = intent?.getStringExtra(EXTRA_BODY)
         if (sender.isNullOrBlank() || body.isNullOrBlank()) {
+            finishIfIdle()
+            return START_NOT_STICKY
+        }
+        if (!settings.isMasterEnabled()) {
             finishIfIdle()
             return START_NOT_STICKY
         }
