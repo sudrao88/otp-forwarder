@@ -8,5 +8,6 @@ data class Otp(
     val sender: String,
     val originalMessage: String,
     val detectedAt: Instant,
-    val confidence: Double
+    val confidence: Double,
+    val classifierTier: ClassifierTier = ClassifierTier.KEYWORD
 )

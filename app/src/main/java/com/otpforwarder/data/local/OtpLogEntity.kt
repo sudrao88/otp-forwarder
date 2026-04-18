@@ -13,6 +13,7 @@ data class OtpLogEntity(
     val originalMessage: String,
     val detectedAt: Long,
     val confidence: Double,
+    val classifierTier: String,
     val ruleName: String,
     val recipientNames: String,
     val status: String,
