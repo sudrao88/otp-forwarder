@@ -1,4 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">OTP Forwarder</string>
+
+    <!-- Notification channels -->
+    <string name="notification_channel_processing_name">OTP Processing</string>
+    <string name="notification_channel_processing_desc">Shown briefly while an incoming OTP is being processed.</string>
+    <string name="notification_channel_results_name">Forwarding Results</string>
+    <string name="notification_channel_results_desc">Notifications about forwarded or failed OTPs.</string>
+
+    <!-- Processing notification -->
+    <string name="notification_processing_title">Processing incoming SMS</string>
+    <string name="notification_processing_text">Checking for OTP…</string>
+
+    <!-- Result notifications -->
+    <string name="notification_forwarded_title">OTP forwarded</string>
+    <string name="notification_failed_title">OTP forward failed</string>
+    <string name="notification_retrying_title">Retrying OTP forward</string>
 </resources>
