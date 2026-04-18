@@ -70,8 +70,16 @@ class EditRuleViewModel @Inject constructor(
     fun setName(v: String) = _state.update { it.copy(name = v, nameError = null) }
     fun setOtpType(v: OtpType) = _state.update { it.copy(otpType = v) }
     fun setPriority(v: String) = _state.update { it.copy(priority = v.filter { c -> c.isDigit() }) }
-    fun setSenderFilter(v: String) = _state.update { it.copy(senderFilter = v) }
-    fun setBodyFilter(v: String) = _state.update { it.copy(bodyFilter = v) }
+    fun setSenderFilter(v: String) = _state.update { it.copy(senderFilter = v, senderFilterError = null) }
+    fun setBodyFilter(v: String) = _state.update { it.copy(bodyFilter = v, bodyFilterError = null) }
+
+    private fun validateRegex(pattern: String): String? {
+        if (pattern.isBlank()) return null
+        return runCatching { Regex(pattern) }.fold(
+            onSuccess = { null },
+            onFailure = { "Invalid regex" }
+        )
+    }
 
     fun toggleRecipient(id: Long) = _state.update {
         val selected = it.selectedRecipientIds
@@ -103,6 +111,17 @@ class EditRuleViewModel @Inject constructor(
         val s = _state.value
         if (s.name.isBlank()) {
             _state.update { it.copy(nameError = "Name is required") }
+            return
+        }
+        val senderFilterError = validateRegex(s.senderFilter)
+        val bodyFilterError = validateRegex(s.bodyFilter)
+        if (senderFilterError != null || bodyFilterError != null) {
+            _state.update {
+                it.copy(
+                    senderFilterError = senderFilterError,
+                    bodyFilterError = bodyFilterError
+                )
+            }
             return
         }
         val priority = s.priority.toIntOrNull() ?: 10
@@ -145,7 +164,9 @@ class EditRuleViewModel @Inject constructor(
         val otpType: OtpType = OtpType.ALL,
         val priority: String = "10",
         val senderFilter: String = "",
+        val senderFilterError: String? = null,
         val bodyFilter: String = "",
+        val bodyFilterError: String? = null,
         val allRecipients: List<Recipient> = emptyList(),
         val selectedRecipientIds: Set<Long> = emptySet()
     )
