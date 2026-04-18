@@ -145,6 +145,8 @@ fun EditRuleScreen(
                 value = state.senderFilter,
                 onValueChange = viewModel::setSenderFilter,
                 label = { Text("Sender regex") },
+                isError = state.senderFilterError != null,
+                supportingText = { state.senderFilterError?.let { Text(it) } },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -152,6 +154,8 @@ fun EditRuleScreen(
                 value = state.bodyFilter,
                 onValueChange = viewModel::setBodyFilter,
                 label = { Text("Body regex") },
+                isError = state.bodyFilterError != null,
+                supportingText = { state.bodyFilterError?.let { Text(it) } },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
