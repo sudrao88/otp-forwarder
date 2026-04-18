@@ -21,21 +21,11 @@ class SettingsRepository @Inject constructor(
 
     val masterEnabled: Flow<Boolean> = booleanFlow(KEY_MASTER_ENABLED, DEFAULT_MASTER_ENABLED)
 
-    val includeOriginalMessage: Flow<Boolean> =
-        booleanFlow(KEY_INCLUDE_ORIGINAL, DEFAULT_INCLUDE_ORIGINAL)
-
     fun isMasterEnabled(): Boolean =
         prefs.getBoolean(KEY_MASTER_ENABLED, DEFAULT_MASTER_ENABLED)
 
     fun setMasterEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_MASTER_ENABLED, enabled).apply()
-    }
-
-    fun isIncludeOriginalMessage(): Boolean =
-        prefs.getBoolean(KEY_INCLUDE_ORIGINAL, DEFAULT_INCLUDE_ORIGINAL)
-
-    fun setIncludeOriginalMessage(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_INCLUDE_ORIGINAL, enabled).apply()
     }
 
     private fun booleanFlow(key: String, default: Boolean): Flow<Boolean> =
@@ -52,8 +42,6 @@ class SettingsRepository @Inject constructor(
     companion object {
         private const val PREFS_NAME = "otp_forwarder_settings"
         private const val KEY_MASTER_ENABLED = "master_enabled"
-        private const val KEY_INCLUDE_ORIGINAL = "include_original_message"
         private const val DEFAULT_MASTER_ENABLED = true
-        private const val DEFAULT_INCLUDE_ORIGINAL = true
     }
 }

@@ -4,6 +4,7 @@ import com.otpforwarder.domain.model.ClassifierTier
 import com.otpforwarder.domain.model.OtpType
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.roundToLong
 
 /**
  * Weighted keyword classifier.
@@ -45,6 +46,12 @@ class KeywordOtpClassifier @Inject constructor() : OtpClassifier {
             }
         }
 
+        // Round to avoid IEEE-754 noise breaking true ties (e.g. 0.7+0.4+0.3
+        // summing to 1.4000000000000001 instead of 1.4 vs 0.8+0.6).
+        for (type in scores.keys.toList()) {
+            scores[type] = roundTo2dp(scores[type]!!)
+        }
+
         val winner = scores
             .filterValues { it >= SCORE_THRESHOLD }
             .entries
@@ -58,6 +65,8 @@ class KeywordOtpClassifier @Inject constructor() : OtpClassifier {
 
         return winner to ClassifierTier.KEYWORD
     }
+
+    private fun roundTo2dp(x: Double): Double = (x * 100.0).roundToLong() / 100.0
 
     companion object {
         const val SCORE_THRESHOLD = 0.5

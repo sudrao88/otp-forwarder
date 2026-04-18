@@ -3,7 +3,6 @@ package com.otpforwarder.ui.screen.settings
 import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.otpforwarder.data.settings.SettingsRepository
 import com.otpforwarder.domain.classification.GeminiOtpClassifier
 import com.otpforwarder.util.PermissionHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -17,7 +16,6 @@ import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val settings: SettingsRepository,
     private val permissionHelper: PermissionHelper,
     private val geminiClassifier: GeminiOtpClassifier
 ) : ViewModel() {
@@ -26,14 +24,12 @@ class SettingsViewModel @Inject constructor(
     private val geminiAvailability = MutableStateFlow(GeminiAvailability.Unknown)
 
     val uiState: StateFlow<SettingsUiState> = combine(
-        settings.includeOriginalMessage,
         permissionState,
         geminiAvailability
-    ) { includeOriginal, perms, gemini ->
+    ) { perms, gemini ->
         SettingsUiState(
             permissions = perms,
             gemini = gemini,
-            includeOriginalMessage = includeOriginal,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -59,10 +55,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun setIncludeOriginalMessage(enabled: Boolean) {
-        settings.setIncludeOriginalMessage(enabled)
-    }
-
     fun openAppSettings() {
         permissionHelper.openAppSettings()
     }
@@ -76,8 +68,7 @@ class SettingsViewModel @Inject constructor(
 
     data class SettingsUiState(
         val permissions: PermissionState = PermissionState(),
-        val gemini: GeminiAvailability = GeminiAvailability.Unknown,
-        val includeOriginalMessage: Boolean = true
+        val gemini: GeminiAvailability = GeminiAvailability.Unknown
     )
 
     data class PermissionState(

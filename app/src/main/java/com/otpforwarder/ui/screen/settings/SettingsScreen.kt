@@ -16,7 +16,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -85,32 +84,6 @@ fun SettingsScreen(
                     KeyValueRow("Active", activeTier)
                     Spacer(Modifier.height(4.dp))
                     KeyValueRow("Gemini Nano", state.gemini.label)
-                }
-            }
-
-            SectionTitle("Forwarding")
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Include original message",
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                        Text(
-                            "Append the source SMS to forwarded messages.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = state.includeOriginalMessage,
-                        onCheckedChange = viewModel::setIncludeOriginalMessage
-                    )
                 }
             }
 

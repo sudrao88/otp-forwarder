@@ -55,7 +55,7 @@ class RuleEngineTest {
      * Fake repository that returns [candidates] as-is from
      * [getMatchingRulesWithRecipients]. Emulates the SQL query that already
      * filters disabled rules/inactive recipients and handles type vs. ALL
-     * matching — the RuleEngine's job is only post-filtering and dedup.
+     * matching — the RuleEngine's remaining job is regex post-filtering.
      */
     private class FakeRepo(
         private val candidates: List<Pair<ForwardingRule, List<Recipient>>>
@@ -150,7 +150,7 @@ class RuleEngineTest {
     }
 
     @Test
-    fun `deduplicates recipient across multiple rules preferring higher priority`() {
+    fun `returns every matching rule with its full recipient list when recipients overlap`() {
         val r1 = rule(1, name = "High", priority = 1)
         val r2 = rule(2, name = "Low", priority = 5)
         val result = evaluate(
@@ -163,11 +163,11 @@ class RuleEngineTest {
         assertEquals("High", result[0].first.name)
         assertEquals(listOf(mom, dad), result[0].second)
         assertEquals("Low", result[1].first.name)
-        assertEquals(listOf(sis), result[1].second)
+        assertEquals(listOf(dad, sis), result[1].second)
     }
 
     @Test
-    fun `drops rule entirely when all its recipients were already claimed`() {
+    fun `keeps rule even when every recipient is shared with a higher-priority rule`() {
         val r1 = rule(1, name = "High", priority = 1)
         val r2 = rule(2, name = "Redundant", priority = 2)
         val result = evaluate(
@@ -176,8 +176,9 @@ class RuleEngineTest {
                 r2 to listOf(mom, dad)
             )
         )
-        assertEquals(1, result.size)
-        assertEquals("High", result[0].first.name)
+        assertEquals(2, result.size)
+        assertEquals(listOf(mom, dad), result[0].second)
+        assertEquals(listOf(mom, dad), result[1].second)
     }
 
     @Test
@@ -195,7 +196,7 @@ class RuleEngineTest {
     }
 
     @Test
-    fun `applies filters and deduplication together`() {
+    fun `applies filters and returns full recipient lists for each surviving rule`() {
         val bankRule = rule(1, name = "Bank", priority = 1, senderFilter = "HDFCBK.*")
         val allRule = rule(2, name = "All", type = OtpType.ALL, priority = 10)
         val result = evaluate(
@@ -206,7 +207,7 @@ class RuleEngineTest {
         )
         assertEquals(2, result.size)
         assertEquals(listOf(mom, dad), result[0].second)
-        assertEquals(listOf(sis), result[1].second)
+        assertEquals(listOf(mom, sis), result[1].second)
     }
 
     @Test

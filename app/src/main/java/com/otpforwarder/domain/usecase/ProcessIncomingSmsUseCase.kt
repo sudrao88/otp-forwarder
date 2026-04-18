@@ -16,8 +16,11 @@ import javax.inject.Singleton
  *   detect → classify (tiered) → match rules → forward → log.
  *
  * Non-OTP messages short-circuit and produce no log entry. OTPs that match no
- * rule are likewise not logged (nothing was forwarded). Per matching rule, one
- * log entry is written with the aggregated per-recipient send status.
+ * rule are likewise not logged (nothing was forwarded). Every matching rule
+ * produces its own log entry so the user can see which rules fired, even when
+ * a lower-priority rule's recipients were all already reached via a
+ * higher-priority rule. Sends themselves are deduped across rules so one
+ * recipient never receives the same OTP twice.
  */
 @Singleton
 class ProcessIncomingSmsUseCase @Inject constructor(
@@ -38,8 +41,12 @@ class ProcessIncomingSmsUseCase @Inject constructor(
         if (plans.isEmpty()) return Result.NoMatchingRule(otp)
 
         val now = Instant.now(clock)
+        val attempted = mutableMapOf<Long, Boolean>()
         for ((rule, recipients) in plans) {
-            val successes = recipients.count { forwardOtp(otp, it) }
+            val outcomes = recipients.map { recipient ->
+                attempted.getOrPut(recipient.id) { forwardOtp(otp, recipient) }
+            }
+            val successes = outcomes.count { it }
             val status = when (successes) {
                 recipients.size -> STATUS_SENT
                 0 -> STATUS_FAILED
