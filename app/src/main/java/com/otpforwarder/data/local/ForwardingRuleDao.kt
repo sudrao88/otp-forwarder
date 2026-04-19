@@ -24,7 +24,7 @@ interface ForwardingRuleDao {
     @Query("SELECT * FROM forwarding_rules WHERE isEnabled = 1 ORDER BY priority ASC")
     suspend fun getEnabledRulesWithDetails(): List<RuleWithDetails>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertRule(rule: ForwardingRuleEntity): Long
 
     @Update
@@ -46,7 +46,7 @@ interface ForwardingRuleDao {
     suspend fun deleteActionsForRule(ruleId: Long)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertActionRecipientCrossRef(crossRef: ActionRecipientCrossRef)
+    suspend fun insertAllCrossRefs(crossRefs: List<ActionRecipientCrossRef>)
 
     @Query(
         """

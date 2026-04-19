@@ -2,16 +2,20 @@ package com.otpforwarder.ui.screen.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.otpforwarder.data.mapper.OtpLogEntry
 import com.otpforwarder.data.settings.SettingsRepository
+import com.otpforwarder.domain.model.OtpLogEntry
 import com.otpforwarder.domain.usecase.ProcessIncomingSmsUseCase
 import com.otpforwarder.domain.repository.OtpLogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
@@ -43,6 +47,12 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    private val _retryEvents = MutableSharedFlow<RetryEvent>(
+        extraBufferCapacity = 4,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val retryEvents: SharedFlow<RetryEvent> = _retryEvents.asSharedFlow()
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val uiState: StateFlow<HomeUiState> = combine(
         settings.masterEnabled,
@@ -68,7 +78,18 @@ class HomeViewModel @Inject constructor(
             // Re-run the full pipeline against the original SMS. On success the
             // original failed log stays in place; a new log entry reflects the
             // retry outcome. The "tick" refresh keeps the list in sync.
-            runCatching { processIncomingSms(entry.sender, entry.originalMessage) }
+            val outcome = runCatching { processIncomingSms(entry.sender, entry.originalMessage) }
+            val event = outcome.fold(
+                onSuccess = { result ->
+                    when (result) {
+                        is ProcessIncomingSmsUseCase.Result.Forwarded -> RetryEvent.Succeeded
+                        is ProcessIncomingSmsUseCase.Result.NoMatchingRule -> RetryEvent.NoMatch
+                        ProcessIncomingSmsUseCase.Result.NotOtp -> RetryEvent.NoMatch
+                    }
+                },
+                onFailure = { RetryEvent.Failed }
+            )
+            _retryEvents.tryEmit(event)
             tick.update { it + 1 }
         }
     }
@@ -77,6 +98,12 @@ class HomeViewModel @Inject constructor(
         val masterEnabled: Boolean = true,
         val logs: List<OtpLogEntry> = emptyList()
     )
+
+    sealed interface RetryEvent {
+        data object Succeeded : RetryEvent
+        data object Failed : RetryEvent
+        data object NoMatch : RetryEvent
+    }
 
     companion object {
         private val WINDOW: Duration = Duration.ofHours(12)

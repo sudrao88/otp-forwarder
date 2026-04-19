@@ -1,6 +1,6 @@
 package com.otpforwarder.domain.repository
 
-import com.otpforwarder.data.mapper.OtpLogEntry
+import com.otpforwarder.domain.model.OtpLogEntry
 import kotlinx.coroutines.flow.Flow
 
 interface OtpLogRepository {

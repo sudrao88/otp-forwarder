@@ -76,7 +76,10 @@ class EditRuleViewModel @Inject constructor(
     }
 
     fun setName(v: String) = _state.update { it.copy(name = v, nameError = null, generalError = null) }
-    fun setPriority(v: String) = _state.update { it.copy(priority = v.filter { c -> c.isDigit() }) }
+    fun setPriority(v: String) = _state.update {
+        val digits = v.filter { c -> c.isDigit() }
+        it.copy(priority = digits.ifBlank { DEFAULT_PRIORITY.toString() })
+    }
 
     fun addCondition(kind: ConditionKind) = _state.update { s ->
         val new: ConditionUi = when (kind) {
@@ -229,7 +232,7 @@ class EditRuleViewModel @Inject constructor(
             return
         }
 
-        val priority = s.priority.toIntOrNull() ?: 10
+        val priority = s.priority.toInt()
         val rule = ForwardingRule(
             id = editingRuleId,
             name = s.name.trim(),
@@ -285,7 +288,13 @@ class EditRuleViewModel @Inject constructor(
 
     private fun validatePattern(pattern: String): String? {
         if (pattern.isBlank()) return "Pattern is required"
-        return runCatching { Regex(pattern) }.fold(
+        return runCatching {
+            val compiled = Regex(pattern)
+            // Smoke test: running the regex once catches a subset of bad patterns that
+            // `Regex(...)` happily compiles (e.g. unbalanced look-behinds on some JVMs).
+            // Catastrophic backtracking is still possible at runtime — out of scope here.
+            compiled.containsMatchIn("")
+        }.fold(
             onSuccess = { null },
             onFailure = { "Invalid regex" }
         )
@@ -307,7 +316,7 @@ class EditRuleViewModel @Inject constructor(
         val isEditing: Boolean = false,
         val name: String = "",
         val nameError: String? = null,
-        val priority: String = "10",
+        val priority: String = DEFAULT_PRIORITY.toString(),
         val conditions: List<ConditionUi> = emptyList(),
         val actions: List<ActionUi> = emptyList(),
         val allRecipients: List<Recipient> = emptyList(),
@@ -317,6 +326,10 @@ class EditRuleViewModel @Inject constructor(
         val inFlight: Boolean = false,
         val showDeleteConfirm: Boolean = false
     )
+
+    companion object {
+        const val DEFAULT_PRIORITY = 10
+    }
 }
 
 enum class ConditionKind { OTP_TYPE, SENDER, BODY }

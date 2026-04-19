@@ -43,7 +43,7 @@ class NotificationHelper @Inject constructor(
      */
     fun buildProcessingNotification(): Notification =
         NotificationCompat.Builder(context, CHANNEL_PROCESSING)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setSmallIcon(R.drawable.ic_notification_small)
             .setContentTitle(context.getString(R.string.notification_processing_title))
             .setContentText(context.getString(R.string.notification_processing_text))
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -71,10 +71,10 @@ class NotificationHelper @Inject constructor(
             append(target)
         }
         notify(
-            id = otp.notificationId(),
+            id = NotificationIds.forOtp(otp),
             title = context.getString(R.string.notification_forwarded_title),
             text = text,
-            smallIcon = android.R.drawable.stat_sys_upload_done
+            smallIcon = R.drawable.ic_notification_small
         )
     }
 
@@ -86,10 +86,10 @@ class NotificationHelper @Inject constructor(
             append(recipientNames.joinToString(", "))
         }
         notify(
-            id = otp.notificationId(),
+            id = NotificationIds.forOtp(otp),
             title = context.getString(R.string.notification_failed_title),
             text = text,
-            smallIcon = android.R.drawable.stat_notify_error
+            smallIcon = R.drawable.ic_notification_small
         )
     }
 
@@ -102,10 +102,10 @@ class NotificationHelper @Inject constructor(
      */
     fun notifyRetrying(sender: String, body: String) {
         notify(
-            id = (sender + body.hashCode()).hashCode(),
+            id = NotificationIds.forRetry(sender, body),
             title = context.getString(R.string.notification_retrying_title),
             text = sender,
-            smallIcon = android.R.drawable.stat_notify_sync
+            smallIcon = R.drawable.ic_notification_small
         )
     }
 
@@ -154,12 +154,17 @@ class NotificationHelper @Inject constructor(
         manager.createNotificationChannels(listOf(processing, results))
     }
 
-    private fun Otp.notificationId(): Int =
-        (sender + code + detectedAt.toEpochMilli()).hashCode()
-
     companion object {
         const val CHANNEL_PROCESSING = "otp_processing"
         const val CHANNEL_RESULTS = "otp_results"
         const val PROCESSING_NOTIFICATION_ID = 1001
     }
+}
+
+object NotificationIds {
+    fun forOtp(otp: Otp): Int =
+        (otp.sender + otp.code + otp.detectedAt.toEpochMilli()).hashCode()
+
+    fun forRetry(sender: String, body: String): Int =
+        (sender + body.hashCode()).hashCode()
 }

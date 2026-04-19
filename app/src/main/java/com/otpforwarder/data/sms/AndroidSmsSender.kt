@@ -49,11 +49,11 @@ class AndroidSmsSender @Inject constructor(
             Manifest.permission.SEND_SMS
         ) == PackageManager.PERMISSION_GRANTED
 
-    @Suppress("DEPRECATION")
     private fun smsManager(): SmsManager? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             context.getSystemService(SmsManager::class.java)
         } else {
+            @Suppress("DEPRECATION")
             SmsManager.getDefault()
         }
 

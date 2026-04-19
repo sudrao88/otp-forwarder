@@ -7,12 +7,14 @@ import com.otpforwarder.data.local.ForwardingRuleDao
 import com.otpforwarder.data.local.OtpLogDao
 import com.otpforwarder.data.local.RecipientDao
 import com.otpforwarder.data.local.migrations.MIGRATION_1_2
+import com.otpforwarder.data.local.migrations.MIGRATION_2_3
 import com.otpforwarder.data.repository.ForwardingRuleRepositoryImpl
 import com.otpforwarder.data.repository.OtpLogRepositoryImpl
 import com.otpforwarder.data.repository.RecipientRepositoryImpl
 import com.otpforwarder.domain.repository.ForwardingRuleRepository
 import com.otpforwarder.domain.repository.OtpLogRepository
 import com.otpforwarder.domain.repository.RecipientRepository
+import dagger.Binds
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -22,46 +24,43 @@ import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
-object DatabaseModule {
+abstract class DatabaseModule {
 
-    @Provides
+    @Binds
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
-        Room.databaseBuilder(
-            context,
-            AppDatabase::class.java,
-            "otp_forwarder_db"
-        )
-            .addMigrations(MIGRATION_1_2)
-            .build()
+    abstract fun bindRecipientRepository(impl: RecipientRepositoryImpl): RecipientRepository
 
-    @Provides
-    fun provideRecipientDao(database: AppDatabase): RecipientDao =
-        database.recipientDao()
-
-    @Provides
-    fun provideForwardingRuleDao(database: AppDatabase): ForwardingRuleDao =
-        database.forwardingRuleDao()
-
-    @Provides
-    fun provideOtpLogDao(database: AppDatabase): OtpLogDao =
-        database.otpLogDao()
-
-    @Provides
+    @Binds
     @Singleton
-    fun provideRecipientRepository(recipientDao: RecipientDao): RecipientRepository =
-        RecipientRepositoryImpl(recipientDao)
+    abstract fun bindForwardingRuleRepository(impl: ForwardingRuleRepositoryImpl): ForwardingRuleRepository
 
-    @Provides
+    @Binds
     @Singleton
-    fun provideForwardingRuleRepository(
-        database: AppDatabase,
-        forwardingRuleDao: ForwardingRuleDao
-    ): ForwardingRuleRepository =
-        ForwardingRuleRepositoryImpl(database, forwardingRuleDao)
+    abstract fun bindOtpLogRepository(impl: OtpLogRepositoryImpl): OtpLogRepository
 
-    @Provides
-    @Singleton
-    fun provideOtpLogRepository(otpLogDao: OtpLogDao): OtpLogRepository =
-        OtpLogRepositoryImpl(otpLogDao)
+    companion object {
+
+        @Provides
+        @Singleton
+        fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
+            Room.databaseBuilder(
+                context,
+                AppDatabase::class.java,
+                "otp_forwarder_db"
+            )
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .build()
+
+        @Provides
+        fun provideRecipientDao(database: AppDatabase): RecipientDao =
+            database.recipientDao()
+
+        @Provides
+        fun provideForwardingRuleDao(database: AppDatabase): ForwardingRuleDao =
+            database.forwardingRuleDao()
+
+        @Provides
+        fun provideOtpLogDao(database: AppDatabase): OtpLogDao =
+            database.otpLogDao()
+    }
 }

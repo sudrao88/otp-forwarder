@@ -110,11 +110,10 @@ class ForwardingRuleRepositoryImpl @Inject constructor(
         rule.actions.forEachIndexed { index, action ->
             val newActionId = forwardingRuleDao.insertAction(action.toEntity(ruleId, index))
             if (action is RuleAction.ForwardSms) {
-                action.recipientIds.distinct().forEach { recipientId ->
-                    forwardingRuleDao.insertActionRecipientCrossRef(
-                        ActionRecipientCrossRef(actionId = newActionId, recipientId = recipientId)
-                    )
+                val refs = action.recipientIds.distinct().map { recipientId ->
+                    ActionRecipientCrossRef(actionId = newActionId, recipientId = recipientId)
                 }
+                if (refs.isNotEmpty()) forwardingRuleDao.insertAllCrossRefs(refs)
             }
         }
     }

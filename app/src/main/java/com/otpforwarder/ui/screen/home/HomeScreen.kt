@@ -21,11 +21,15 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,12 +38,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.otpforwarder.data.mapper.OtpLogEntry
+import com.otpforwarder.domain.model.OtpLogEntry
 import com.otpforwarder.domain.usecase.ProcessIncomingSmsUseCase
 import com.otpforwarder.ui.util.DayBucket
 import com.otpforwarder.ui.util.dayBucket
 import com.otpforwarder.ui.util.formatRelativeTime
 import com.otpforwarder.ui.util.label
+import kotlinx.coroutines.flow.collect
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,6 +52,18 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(viewModel) {
+        viewModel.retryEvents.collect { event ->
+            val message = when (event) {
+                HomeViewModel.RetryEvent.Succeeded -> "Retry succeeded"
+                HomeViewModel.RetryEvent.Failed -> "Retry failed — will try again automatically"
+                HomeViewModel.RetryEvent.NoMatch -> "Retry produced no forwarding match"
+            }
+            snackbarHostState.showSnackbar(message)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -69,7 +86,8 @@ fun HomeScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { inner ->
         if (state.logs.isEmpty()) {
             EmptyHome(modifier = Modifier.padding(inner))
@@ -163,7 +181,7 @@ private fun OtpLogCard(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                text = "${entry.otpType.name} → ${entry.recipientNames.joinToString(", ")}",
+                text = "${entry.otpType.name} → ${entry.summaryLines.joinToString(", ")}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

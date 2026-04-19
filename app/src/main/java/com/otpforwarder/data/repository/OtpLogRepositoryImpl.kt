@@ -1,7 +1,7 @@
 package com.otpforwarder.data.repository
 
 import com.otpforwarder.data.local.OtpLogDao
-import com.otpforwarder.data.mapper.OtpLogEntry
+import com.otpforwarder.domain.model.OtpLogEntry
 import com.otpforwarder.data.mapper.toDomain
 import com.otpforwarder.data.mapper.toEntity
 import com.otpforwarder.domain.repository.OtpLogRepository

@@ -121,8 +121,8 @@ class OtpProcessingService : Service() {
 
     companion object {
         private const val TAG = "OtpProcessingService"
-        const val EXTRA_SENDER = "extra_sender"
-        const val EXTRA_BODY = "extra_body"
+        internal const val EXTRA_SENDER = "extra_sender"
+        internal const val EXTRA_BODY = "extra_body"
 
         fun intent(context: Context, sender: String, body: String): Intent =
             Intent(context, OtpProcessingService::class.java).apply {

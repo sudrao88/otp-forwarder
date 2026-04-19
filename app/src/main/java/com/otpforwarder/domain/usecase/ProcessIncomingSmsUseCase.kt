@@ -1,6 +1,6 @@
 package com.otpforwarder.domain.usecase
 
-import com.otpforwarder.data.mapper.OtpLogEntry
+import com.otpforwarder.domain.model.OtpLogEntry
 import com.otpforwarder.domain.classification.OtpClassifier
 import com.otpforwarder.domain.detection.OtpDetector
 import com.otpforwarder.domain.engine.RuleEngine
@@ -73,7 +73,7 @@ class ProcessIncomingSmsUseCase @Inject constructor(
                     confidence = otp.confidence,
                     classifierTier = otp.classifierTier,
                     ruleName = rule.name,
-                    recipientNames = outcomes.map { it.summary },
+                    summaryLines = outcomes.map { it.summary },
                     status = status,
                     forwardedAt = now
                 )
