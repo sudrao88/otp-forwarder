@@ -5,7 +5,9 @@ import com.otpforwarder.domain.classification.OtpClassifier
 import com.otpforwarder.domain.detection.OtpDetector
 import com.otpforwarder.domain.engine.RuleEngine
 import com.otpforwarder.domain.model.Otp
+import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.repository.OtpLogRepository
+import com.otpforwarder.domain.repository.RecipientRepository
 import java.time.Clock
 import java.time.Instant
 import javax.inject.Inject
@@ -28,6 +30,7 @@ class ProcessIncomingSmsUseCase @Inject constructor(
     private val classifier: OtpClassifier,
     private val ruleEngine: RuleEngine,
     private val forwardOtp: ForwardOtpUseCase,
+    private val recipientRepository: RecipientRepository,
     private val otpLogRepository: OtpLogRepository,
     private val clock: Clock
 ) {
@@ -37,12 +40,17 @@ class ProcessIncomingSmsUseCase @Inject constructor(
         val (type, tier) = classifier.classify(sender, body)
         val otp = detected.copy(type = type, classifierTier = tier)
 
-        val plans = ruleEngine.evaluate(otp)
-        if (plans.isEmpty()) return Result.NoMatchingRule(otp)
+        val matchingRules = ruleEngine.evaluate(otp)
+        if (matchingRules.isEmpty()) return Result.NoMatchingRule(otp)
 
+        val recipientsById = recipientRepository.getActiveRecipients().associateBy { it.id }
         val now = Instant.now(clock)
         val attempted = mutableMapOf<Long, Boolean>()
-        for ((rule, recipients) in plans) {
+        for (rule in matchingRules) {
+            val recipientIds = rule.actions.filterIsInstance<RuleAction.ForwardSms>()
+                .flatMap { it.recipientIds }
+                .distinct()
+            val recipients = recipientIds.mapNotNull { recipientsById[it] }
             val outcomes = recipients.map { recipient ->
                 attempted.getOrPut(recipient.id) { forwardOtp(otp, recipient) }
             }
@@ -69,7 +77,7 @@ class ProcessIncomingSmsUseCase @Inject constructor(
                 )
             )
         }
-        return Result.Forwarded(otp, plans.size)
+        return Result.Forwarded(otp, matchingRules.size)
     }
 
     sealed interface Result {

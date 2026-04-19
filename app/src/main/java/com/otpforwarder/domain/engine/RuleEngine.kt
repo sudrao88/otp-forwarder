@@ -1,49 +1,34 @@
 package com.otpforwarder.domain.engine
 
+import com.otpforwarder.domain.model.Connector
 import com.otpforwarder.domain.model.ForwardingRule
 import com.otpforwarder.domain.model.Otp
 import com.otpforwarder.domain.model.OtpType
-import com.otpforwarder.domain.model.Recipient
-import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.model.RuleCondition
 import com.otpforwarder.domain.repository.ForwardingRuleRepository
-import com.otpforwarder.domain.repository.RecipientRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Phase 1 stub: evaluates the new condition list with simple AND-of-all semantics.
- * Phase 2 will replace this with proper left-to-right AND/OR evaluation.
- *
- * Returns matching enabled rules paired with the recipients of their `ForwardSms`
- * actions (deduped per rule). Rules with no `ForwardSms` action are still returned
- * with an empty recipient list so callers can see the rule fired.
- */
 @Singleton
 class RuleEngine @Inject constructor(
-    private val ruleRepository: ForwardingRuleRepository,
-    private val recipientRepository: RecipientRepository
+    private val ruleRepository: ForwardingRuleRepository
 ) {
 
-    suspend fun evaluate(otp: Otp): List<Pair<ForwardingRule, List<Recipient>>> {
-        val rules = ruleRepository.getEnabledRulesWithDetails()
-        val matching = rules.filter { matchesAll(it, otp) }
-        if (matching.isEmpty()) return emptyList()
+    suspend fun evaluate(otp: Otp): List<ForwardingRule> =
+        ruleRepository.getEnabledRulesWithDetails()
+            .filter { evaluateConditions(it.conditions, otp) }
 
-        val recipientsById = recipientRepository.getActiveRecipients().associateBy { it.id }
-
-        return matching.map { rule ->
-            val recipientIds = rule.actions.filterIsInstance<RuleAction.ForwardSms>()
-                .flatMap { it.recipientIds }
-                .distinct()
-            val recipients = recipientIds.mapNotNull { recipientsById[it] }
-            rule to recipients
+    private fun evaluateConditions(conditions: List<RuleCondition>, otp: Otp): Boolean {
+        if (conditions.isEmpty()) return true
+        var result = conditions[0].matches(otp)
+        for (i in 1..conditions.lastIndex) {
+            val next = conditions[i].matches(otp)
+            result = when (conditions[i].connector) {
+                Connector.AND -> result && next
+                Connector.OR -> result || next
+            }
         }
-    }
-
-    private fun matchesAll(rule: ForwardingRule, otp: Otp): Boolean {
-        if (rule.conditions.isEmpty()) return true
-        return rule.conditions.all { it.matches(otp) }
+        return result
     }
 
     private fun RuleCondition.matches(otp: Otp): Boolean = when (this) {
