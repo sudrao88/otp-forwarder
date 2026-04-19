@@ -6,11 +6,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Orchestrator that tries [GeminiOtpClassifier] first and silently falls back to
- * [KeywordOtpClassifier] on unavailability, timeout, or an unparsable response.
+ * Orchestrator that tries [GeminiOtpClassifier] first and falls back to
+ * [KeywordOtpClassifier] on unavailability or an `UNKNOWN` result.
  *
- * The returned [ClassifierTier] identifies which tier produced the result, and is
- * persisted in [com.otpforwarder.data.local.OtpLogEntity] for observability.
+ * [GeminiOtpClassifier.classify] already converts any non-cancellation
+ * throwable into `UNKNOWN to GEMINI_NANO`, so no outer `runCatching` is
+ * needed here — and wrapping in one would mask `CancellationException`.
+ *
+ * The returned [ClassifierTier] identifies which tier produced the result and
+ * is persisted in [com.otpforwarder.data.local.OtpLogEntity] for observability.
  */
 @Singleton
 class TieredOtpClassifier @Inject constructor(
@@ -23,8 +27,7 @@ class TieredOtpClassifier @Inject constructor(
         body: String
     ): Pair<OtpType, ClassifierTier> {
         if (gemini.isAvailable()) {
-            val (type, tier) = runCatching { gemini.classify(sender, body) }
-                .getOrDefault(OtpType.UNKNOWN to ClassifierTier.GEMINI_NANO)
+            val (type, tier) = gemini.classify(sender, body)
             if (type != OtpType.UNKNOWN) return type to tier
         }
         return keyword.classify(sender, body)

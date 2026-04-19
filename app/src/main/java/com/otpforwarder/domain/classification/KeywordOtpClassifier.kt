@@ -17,6 +17,11 @@ import kotlin.math.roundToLong
  * [SCORE_THRESHOLD]. On a tie, the *more specific* category wins — defined here
  * as the category with fewer total registered keywords (a smaller vocabulary
  * implies a narrower, more specific topic).
+ *
+ * Keyword matches are word-boundary anchored so `tax` doesn't match `syntax`,
+ * `credit` doesn't double-count inside `credited`, and `pan` doesn't match
+ * `Japan`. Uses `(?<!\w)…(?!\w)` rather than `\b…\b` so keywords whose
+ * leading/trailing character is non-word (`a/c`, `Rs.`) still match.
  */
 @Singleton
 class KeywordOtpClassifier @Inject constructor() : OtpClassifier {
@@ -25,21 +30,19 @@ class KeywordOtpClassifier @Inject constructor() : OtpClassifier {
         sender: String,
         body: String
     ): Pair<OtpType, ClassifierTier> {
-        val normalizedBody = body.lowercase()
         val normalizedSender = sender.uppercase()
 
         val scores = mutableMapOf<OtpType, Double>()
-        for ((type, keywords) in CATEGORY_KEYWORDS) {
+        for ((type, keywords) in CATEGORY_REGEXES) {
             var score = 0.0
-            for ((keyword, weight) in keywords) {
-                if (normalizedBody.contains(keyword.lowercase())) {
+            for ((regex, weight) in keywords) {
+                if (regex.containsMatchIn(body)) {
                     score += weight
                 }
             }
             if (score > 0.0) scores[type] = score
         }
 
-        // Sender reputation boost
         for ((prefix, type) in SENDER_BOOST) {
             if (normalizedSender.contains(prefix)) {
                 scores[type] = (scores[type] ?: 0.0) + SENDER_BOOST_WEIGHT
@@ -57,7 +60,6 @@ class KeywordOtpClassifier @Inject constructor() : OtpClassifier {
             .entries
             .maxWithOrNull(
                 compareBy<Map.Entry<OtpType, Double>> { it.value }
-                    // Tie-breaker: more specific (fewer total keywords) wins
                     .thenByDescending { CATEGORY_KEYWORDS[it.key]?.size ?: Int.MAX_VALUE }
             )
             ?.key
@@ -106,6 +108,7 @@ class KeywordOtpClassifier @Inject constructor() : OtpClassifier {
                 "tracking" to 0.8,
                 "courier" to 0.9,
                 "dispatch" to 0.7,
+                "dispatched" to 0.7,
                 "out for delivery" to 1.0,
                 "AWB" to 0.9
             ),
@@ -135,6 +138,13 @@ class KeywordOtpClassifier @Inject constructor() : OtpClassifier {
                 "ITR" to 0.9
             )
         )
+
+        private val CATEGORY_REGEXES: Map<OtpType, List<Pair<Regex, Double>>> =
+            CATEGORY_KEYWORDS.mapValues { (_, keywords) ->
+                keywords.map { (kw, weight) ->
+                    Regex("(?<!\\w)${Regex.escape(kw)}(?!\\w)", RegexOption.IGNORE_CASE) to weight
+                }
+            }
 
         val SENDER_BOOST: Map<String, OtpType> = mapOf(
             "HDFCBK" to OtpType.TRANSACTION,

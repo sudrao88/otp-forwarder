@@ -2,6 +2,7 @@ package com.otpforwarder.domain.classification
 
 import com.otpforwarder.domain.model.ClassifierTier
 import com.otpforwarder.domain.model.OtpType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -9,19 +10,21 @@ import javax.inject.Singleton
 /**
  * On-device classification backed by Google AI Edge SDK's `GenerativeModel` (Gemini Nano).
  *
- * The SDK surface is invoked via reflection so the app still builds and runs on
- * devices or CI environments where the artifact is not present. When the SDK or
- * backing AICore service is unavailable, [isAvailable] returns `false` and
- * [classify] surfaces `UNKNOWN` (the [TieredOtpClassifier] falls back to the
- * keyword classifier on that signal).
+ * The Gemini SDK is **not currently on the project classpath**, so the default
+ * [GeminiRuntime] binding ([DisabledGeminiRuntime]) reports unavailable and the
+ * [TieredOtpClassifier] always falls back to the keyword classifier in shipped
+ * builds. To enable the Gemini tier, add the `com.google.ai.edge:generative-ai`
+ * artifact to `app/build.gradle.kts`, provide a real runtime that wraps
+ * `GenerativeModel`, and rebind [GeminiRuntime] in `DomainModule`.
+ *
+ * Any unchecked throwable from the runtime is converted to `UNKNOWN` so the
+ * tiered orchestrator falls back transparently. `CancellationException` is
+ * explicitly re-thrown to preserve structured concurrency.
  */
 @Singleton
-class GeminiOtpClassifier(
+class GeminiOtpClassifier @Inject constructor(
     private val runtime: GeminiRuntime
 ) : OtpClassifier {
-
-    @Inject
-    constructor() : this(ReflectiveGeminiRuntime())
 
     suspend fun isAvailable(): Boolean = runtime.isAvailable()
 
@@ -33,7 +36,13 @@ class GeminiOtpClassifier(
 
         val prompt = buildPrompt(body)
         val raw = withTimeoutOrNull(TIMEOUT_MS) {
-            runCatching { runtime.generate(prompt) }.getOrNull()
+            try {
+                runtime.generate(prompt)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (_: Throwable) {
+                null
+            }
         } ?: return OtpType.UNKNOWN to ClassifierTier.GEMINI_NANO
 
         return parseType(raw) to ClassifierTier.GEMINI_NANO
@@ -68,7 +77,7 @@ class GeminiOtpClassifier(
 
 /**
  * Indirection over the Google AI Edge `GenerativeModel` so it can be stubbed in tests
- * and so the classifier still compiles if the SDK artifact is not on the classpath.
+ * and so the classifier still compiles / runs without the SDK on the classpath.
  */
 interface GeminiRuntime {
     suspend fun isAvailable(): Boolean
@@ -76,25 +85,12 @@ interface GeminiRuntime {
 }
 
 /**
- * Calls the Google AI Edge SDK via reflection. If the SDK classes are not present
- * (or the on-device model is not available), [isAvailable] returns `false` and
- * [generate] throws — callers must guard with [isAvailable] first.
+ * Default binding used until the Gemini SDK is added to the project classpath.
+ * Reports unavailable; [generate] is never called because [isAvailable] gates it.
  */
-class ReflectiveGeminiRuntime : GeminiRuntime {
-    override suspend fun isAvailable(): Boolean = runCatching {
-        val clazz = Class.forName("com.google.ai.edge.generativeai.GenerativeModel")
-        val method = clazz.getMethod("isAvailable")
-        method.invoke(null) as? Boolean ?: false
-    }.getOrDefault(false)
-
-    override suspend fun generate(prompt: String): String {
-        val clazz = Class.forName("com.google.ai.edge.generativeai.GenerativeModel")
-        val instance = clazz.getConstructor(String::class.java).newInstance(DEFAULT_MODEL)
-        val generate = clazz.getMethod("generateContent", String::class.java)
-        return generate.invoke(instance, prompt)?.toString().orEmpty()
-    }
-
-    private companion object {
-        const val DEFAULT_MODEL = "gemini-nano"
-    }
+@Singleton
+class DisabledGeminiRuntime @Inject constructor() : GeminiRuntime {
+    override suspend fun isAvailable(): Boolean = false
+    override suspend fun generate(prompt: String): String =
+        throw UnsupportedOperationException("Gemini runtime is disabled")
 }

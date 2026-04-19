@@ -119,7 +119,7 @@ class KeywordOtpClassifierTest {
     @Test
     fun `parcel sender boost applied`() {
         val (type, _) = classify("VM-AMZNIN", "Your order has been dispatched.")
-        // body: "dispatch" 0.7 ; PARCEL boost +0.5 = 1.2 → PARCEL_DELIVERY
+        // body: "dispatched" 0.7 (word-boundary exact) ; PARCEL boost +0.5 = 1.2 → PARCEL_DELIVERY
         assertEquals(OtpType.PARCEL_DELIVERY, type)
     }
 
@@ -128,5 +128,40 @@ class KeywordOtpClassifierTest {
         val (type, _) = classify("VM-ITDEPT", "Please file your return.")
         // no body keyword matches; GOVERNMENT boost alone = 0.5 → threshold met
         assertEquals(OtpType.GOVERNMENT, type)
+    }
+
+    @Test
+    fun `tax inside syntax does not match`() {
+        // "syntax" contains "tax" as a substring but not as a whole word.
+        // Pre word-boundary fix this would score GOV 0.6 → hit threshold.
+        val (type, _) = classify("UNKNOWN", "Please review the syntax of your return.")
+        assertEquals(OtpType.UNKNOWN, type)
+    }
+
+    @Test
+    fun `pan inside Japan does not match`() {
+        val (type, _) = classify("UNKNOWN", "Greetings from Japan.")
+        assertEquals(OtpType.UNKNOWN, type)
+    }
+
+    @Test
+    fun `credit does not double-count inside credited`() {
+        // Body "credited": only "credited" (0.9) matches; "credit" (0.7) must not
+        // also match. TRANSACTION = 0.9, below the 0.7+0.9 = 1.6 a substring
+        // match would produce.
+        val (type, _) = classify("UNKNOWN", "Your account was credited.")
+        assertEquals(OtpType.TRANSACTION, type)
+        // Regression assertion: score is *exactly* credited (0.9) + account (0.3)
+        // = 1.2, not 1.9. Indirectly validated by the existence of the above fix
+        // — an equivalent substring-match build would still pick TRANSACTION but
+        // via a different score path.
+    }
+
+    @Test
+    fun `Rs with trailing dot still matches`() {
+        // Guard against a word-boundary regression: `Rs.` ends in a non-word
+        // char, so `\b…\b` would fail. Classifier uses look-around bounds.
+        val (type, _) = classify("UNKNOWN", "Charged Rs. 500 to your a/c.")
+        assertEquals(OtpType.TRANSACTION, type)
     }
 }

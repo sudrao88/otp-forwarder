@@ -37,7 +37,7 @@ class RegexOtpDetector(
             originalMessage = body,
             detectedAt = Instant.now(clock),
             confidence = confidence,
-            classifierTier = ClassifierTier.KEYWORD
+            classifierTier = ClassifierTier.NONE
         )
     }
 

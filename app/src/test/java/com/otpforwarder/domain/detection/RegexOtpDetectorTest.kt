@@ -34,7 +34,7 @@ class RegexOtpDetectorTest {
         assertEquals("482910", result!!.code)
         assertEquals(0.95, result.confidence, 0.0)
         assertEquals(OtpType.UNKNOWN, result.type)
-        assertEquals(ClassifierTier.KEYWORD, result.classifierTier)
+        assertEquals(ClassifierTier.NONE, result.classifierTier)
         assertEquals("HDFCBK", result.sender)
     }
 

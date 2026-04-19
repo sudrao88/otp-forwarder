@@ -1,6 +1,8 @@
 package com.otpforwarder.di
 
 import com.otpforwarder.data.sms.AndroidSmsSender
+import com.otpforwarder.domain.classification.DisabledGeminiRuntime
+import com.otpforwarder.domain.classification.GeminiRuntime
 import com.otpforwarder.domain.classification.OtpClassifier
 import com.otpforwarder.domain.classification.TieredOtpClassifier
 import com.otpforwarder.domain.detection.OtpDetector
@@ -25,6 +27,10 @@ abstract class DomainModule {
     @Binds
     @Singleton
     abstract fun bindOtpClassifier(impl: TieredOtpClassifier): OtpClassifier
+
+    @Binds
+    @Singleton
+    abstract fun bindGeminiRuntime(impl: DisabledGeminiRuntime): GeminiRuntime
 
     @Binds
     @Singleton

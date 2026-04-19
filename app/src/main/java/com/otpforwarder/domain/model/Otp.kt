@@ -9,5 +9,5 @@ data class Otp(
     val originalMessage: String,
     val detectedAt: Instant,
     val confidence: Double,
-    val classifierTier: ClassifierTier = ClassifierTier.KEYWORD
+    val classifierTier: ClassifierTier = ClassifierTier.NONE
 )
