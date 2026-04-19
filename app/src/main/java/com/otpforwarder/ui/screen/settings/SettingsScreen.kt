@@ -74,6 +74,18 @@ fun SettingsScreen(
                             onClick = viewModel::openAppSettings
                         )
                     }
+                    HorizontalDivider()
+                    PermissionRow(
+                        label = "Call phone",
+                        granted = state.permissions.callPhone,
+                        onClick = viewModel::openAppSettings
+                    )
+                    HorizontalDivider()
+                    PermissionRow(
+                        label = "Do Not Disturb access",
+                        granted = state.permissions.notificationPolicy,
+                        onClick = viewModel::openNotificationPolicySettings
+                    )
                 }
             }
 

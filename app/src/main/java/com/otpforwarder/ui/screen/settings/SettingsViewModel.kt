@@ -59,11 +59,17 @@ class SettingsViewModel @Inject constructor(
         permissionHelper.openAppSettings()
     }
 
+    fun openNotificationPolicySettings() {
+        permissionHelper.openNotificationPolicySettings()
+    }
+
     private fun readPermissionState(): PermissionState = PermissionState(
         receiveSms = permissionHelper.hasReceiveSms(),
         sendSms = permissionHelper.hasSendSms(),
         notifications = permissionHelper.hasPostNotifications(),
-        notificationsSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        notificationsSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+        callPhone = permissionHelper.hasCallPhone(),
+        notificationPolicy = permissionHelper.hasNotificationPolicyAccess()
     )
 
     data class SettingsUiState(
@@ -75,7 +81,9 @@ class SettingsViewModel @Inject constructor(
         val receiveSms: Boolean = false,
         val sendSms: Boolean = false,
         val notifications: Boolean = true,
-        val notificationsSupported: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val notificationsSupported: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+        val callPhone: Boolean = false,
+        val notificationPolicy: Boolean = false
     )
 
     enum class GeminiAvailability {

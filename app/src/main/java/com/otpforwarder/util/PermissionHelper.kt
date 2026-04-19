@@ -1,6 +1,7 @@
 package com.otpforwarder.util
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -50,6 +51,14 @@ class PermissionHelper @Inject constructor(
         return isGranted(Manifest.permission.POST_NOTIFICATIONS)
     }
 
+    fun hasCallPhone(): Boolean = isGranted(Manifest.permission.CALL_PHONE)
+
+    fun hasNotificationPolicyAccess(): Boolean {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            ?: return false
+        return nm.isNotificationPolicyAccessGranted
+    }
+
     /** `true` only when every permission required for the pipeline is granted. */
     fun hasAllRequired(): Boolean = requiredPermissions.all(::isGranted)
 
@@ -57,6 +66,14 @@ class PermissionHelper @Inject constructor(
     fun openAppSettings() {
         val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
             data = Uri.fromParts("package", context.packageName, null)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(intent)
+    }
+
+    /** Opens the system Notification Policy access screen (special access). */
+    fun openNotificationPolicySettings() {
+        val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
         context.startActivity(intent)
