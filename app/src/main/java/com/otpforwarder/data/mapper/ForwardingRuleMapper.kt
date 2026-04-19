@@ -1,30 +1,120 @@
 package com.otpforwarder.data.mapper
 
+import com.otpforwarder.data.local.ActionWithRecipients
 import com.otpforwarder.data.local.ForwardingRuleEntity
-import com.otpforwarder.data.local.RuleWithRecipients
+import com.otpforwarder.data.local.RuleActionEntity
+import com.otpforwarder.data.local.RuleConditionEntity
+import com.otpforwarder.data.local.RuleWithDetails
+import com.otpforwarder.domain.model.Connector
 import com.otpforwarder.domain.model.ForwardingRule
 import com.otpforwarder.domain.model.OtpType
-import com.otpforwarder.domain.model.Recipient
+import com.otpforwarder.domain.model.RuleAction
+import com.otpforwarder.domain.model.RuleCondition
 
-fun ForwardingRuleEntity.toDomain(): ForwardingRule = ForwardingRule(
+fun ForwardingRuleEntity.toDomainShallow(): ForwardingRule = ForwardingRule(
     id = id,
     name = name,
-    otpType = OtpType.valueOf(otpType),
     isEnabled = isEnabled,
     priority = priority,
-    senderFilter = senderFilter,
-    bodyFilter = bodyFilter
+    conditions = emptyList(),
+    actions = emptyList()
 )
 
-fun ForwardingRule.toEntity(): ForwardingRuleEntity = ForwardingRuleEntity(
+fun ForwardingRule.toRuleEntity(): ForwardingRuleEntity = ForwardingRuleEntity(
     id = id,
     name = name,
-    otpType = otpType.name,
     isEnabled = isEnabled,
-    priority = priority,
-    senderFilter = senderFilter,
-    bodyFilter = bodyFilter
+    priority = priority
 )
 
-fun RuleWithRecipients.toDomain(): Pair<ForwardingRule, List<Recipient>> =
-    rule.toDomain() to recipients.map { it.toDomain() }
+fun RuleConditionEntity.toDomain(): RuleCondition {
+    val conn = runCatching { Connector.valueOf(connector) }.getOrDefault(Connector.AND)
+    return when (conditionType) {
+        RuleConditionEntity.TYPE_OTP_TYPE -> RuleCondition.OtpTypeIs(
+            type = otpTypeValue?.let { runCatching { OtpType.valueOf(it) }.getOrNull() }
+                ?: OtpType.ALL,
+            connector = conn
+        )
+        RuleConditionEntity.TYPE_SENDER_REGEX -> RuleCondition.SenderMatches(
+            pattern = pattern.orEmpty(),
+            connector = conn
+        )
+        RuleConditionEntity.TYPE_BODY_REGEX -> RuleCondition.BodyContains(
+            pattern = pattern.orEmpty(),
+            connector = conn
+        )
+        else -> RuleCondition.OtpTypeIs(OtpType.ALL, conn)
+    }
+}
+
+fun RuleCondition.toEntity(ruleId: Long, orderIndex: Int): RuleConditionEntity = when (this) {
+    is RuleCondition.OtpTypeIs -> RuleConditionEntity(
+        ruleId = ruleId,
+        orderIndex = orderIndex,
+        connector = connector.name,
+        conditionType = RuleConditionEntity.TYPE_OTP_TYPE,
+        otpTypeValue = type.name,
+        pattern = null
+    )
+    is RuleCondition.SenderMatches -> RuleConditionEntity(
+        ruleId = ruleId,
+        orderIndex = orderIndex,
+        connector = connector.name,
+        conditionType = RuleConditionEntity.TYPE_SENDER_REGEX,
+        otpTypeValue = null,
+        pattern = pattern
+    )
+    is RuleCondition.BodyContains -> RuleConditionEntity(
+        ruleId = ruleId,
+        orderIndex = orderIndex,
+        connector = connector.name,
+        conditionType = RuleConditionEntity.TYPE_BODY_REGEX,
+        otpTypeValue = null,
+        pattern = pattern
+    )
+}
+
+fun ActionWithRecipients.toDomain(): RuleAction = when (action.actionType) {
+    RuleActionEntity.TYPE_FORWARD_SMS -> RuleAction.ForwardSms(
+        recipientIds = recipients.map { it.id }
+    )
+    RuleActionEntity.TYPE_RINGER_LOUD -> RuleAction.SetRingerLoud
+    RuleActionEntity.TYPE_PLACE_CALL -> RuleAction.PlaceCall(
+        recipientId = action.callRecipientId ?: 0L
+    )
+    else -> RuleAction.SetRingerLoud
+}
+
+fun RuleAction.toEntity(ruleId: Long, orderIndex: Int): RuleActionEntity = when (this) {
+    is RuleAction.ForwardSms -> RuleActionEntity(
+        ruleId = ruleId,
+        orderIndex = orderIndex,
+        actionType = RuleActionEntity.TYPE_FORWARD_SMS,
+        callRecipientId = null
+    )
+    RuleAction.SetRingerLoud -> RuleActionEntity(
+        ruleId = ruleId,
+        orderIndex = orderIndex,
+        actionType = RuleActionEntity.TYPE_RINGER_LOUD,
+        callRecipientId = null
+    )
+    is RuleAction.PlaceCall -> RuleActionEntity(
+        ruleId = ruleId,
+        orderIndex = orderIndex,
+        actionType = RuleActionEntity.TYPE_PLACE_CALL,
+        callRecipientId = recipientId
+    )
+}
+
+fun RuleWithDetails.toDomain(): ForwardingRule = ForwardingRule(
+    id = rule.id,
+    name = rule.name,
+    isEnabled = rule.isEnabled,
+    priority = rule.priority,
+    conditions = conditions
+        .sortedBy { it.orderIndex }
+        .map { it.toDomain() },
+    actions = actions
+        .sortedBy { it.action.orderIndex }
+        .map { it.toDomain() }
+)

@@ -3,9 +3,12 @@ package com.otpforwarder.ui.screen.rules
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.otpforwarder.domain.model.Connector
 import com.otpforwarder.domain.model.ForwardingRule
 import com.otpforwarder.domain.model.OtpType
 import com.otpforwarder.domain.model.Recipient
+import com.otpforwarder.domain.model.RuleAction
+import com.otpforwarder.domain.model.RuleCondition
 import com.otpforwarder.domain.repository.ForwardingRuleRepository
 import com.otpforwarder.domain.repository.RecipientRepository
 import com.otpforwarder.ui.navigation.Destinations
@@ -18,6 +21,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * Phase 1 transitional UI: still presents the old single-OtpType + sender + body
+ * editor, but persists through the new condition/action data model. Phase 5 will
+ * replace this with the multi-condition / multi-action UI.
+ */
 @HiltViewModel
 class EditRuleViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -38,18 +46,21 @@ class EditRuleViewModel @Inject constructor(
         viewModelScope.launch {
             val allRecipients = recipientRepository.getAllRecipientsSnapshot()
             if (editingRuleId != 0L) {
-                val existing = ruleRepository.getRuleWithRecipientsById(editingRuleId)
+                val existing = ruleRepository.getRuleWithDetailsById(editingRuleId)
                 if (existing != null) {
-                    val (rule, recipients) = existing
+                    val (otpType, sender, body) = unpackConditions(existing.conditions)
+                    val selected = existing.actions.filterIsInstance<RuleAction.ForwardSms>()
+                        .flatMap { it.recipientIds }
+                        .toSet()
                     _state.update {
                         it.copy(
-                            name = rule.name,
-                            otpType = rule.otpType,
-                            priority = rule.priority.toString(),
-                            senderFilter = rule.senderFilter.orEmpty(),
-                            bodyFilter = rule.bodyFilter.orEmpty(),
+                            name = existing.name,
+                            otpType = otpType,
+                            priority = existing.priority.toString(),
+                            senderFilter = sender.orEmpty(),
+                            bodyFilter = body.orEmpty(),
                             allRecipients = allRecipients,
-                            selectedRecipientIds = recipients.map { r -> r.id }.toSet()
+                            selectedRecipientIds = selected
                         )
                     }
                     return@launch
@@ -125,24 +136,22 @@ class EditRuleViewModel @Inject constructor(
             return
         }
         val priority = s.priority.toIntOrNull() ?: 10
+        val conditions = buildConditions(s.otpType, s.senderFilter, s.bodyFilter)
+        val actions = listOf(RuleAction.ForwardSms(s.selectedRecipientIds.toList()))
         val rule = ForwardingRule(
             id = editingRuleId,
             name = s.name.trim(),
-            otpType = s.otpType,
             isEnabled = true,
             priority = priority,
-            senderFilter = s.senderFilter.ifBlank { null },
-            bodyFilter = s.bodyFilter.ifBlank { null }
+            conditions = conditions,
+            actions = actions
         )
         viewModelScope.launch {
             if (s.isEditing) {
                 val existing = ruleRepository.getRuleById(editingRuleId)
-                ruleRepository.updateRule(
-                    rule.copy(isEnabled = existing?.isEnabled ?: true),
-                    s.selectedRecipientIds.toList()
-                )
+                ruleRepository.updateRule(rule.copy(isEnabled = existing?.isEnabled ?: true))
             } else {
-                ruleRepository.insertRule(rule, s.selectedRecipientIds.toList())
+                ruleRepository.insertRule(rule)
             }
             onDone()
         }
@@ -172,6 +181,32 @@ class EditRuleViewModel @Inject constructor(
     )
 }
 
-/** Snapshot helper so we can read a one-shot list without collecting. */
+/**
+ * Reduces a stored condition list back into the legacy (otpType, sender, body)
+ * triple the Phase 1 editor still operates on. Picks the first matching
+ * condition of each kind; everything else is dropped on save.
+ */
+private fun unpackConditions(
+    conditions: List<RuleCondition>
+): Triple<OtpType, String?, String?> {
+    val otp = conditions.filterIsInstance<RuleCondition.OtpTypeIs>()
+        .firstOrNull()?.type ?: OtpType.ALL
+    val sender = conditions.filterIsInstance<RuleCondition.SenderMatches>()
+        .firstOrNull()?.pattern
+    val body = conditions.filterIsInstance<RuleCondition.BodyContains>()
+        .firstOrNull()?.pattern
+    return Triple(otp, sender, body)
+}
+
+private fun buildConditions(
+    otpType: OtpType,
+    sender: String,
+    body: String
+): List<RuleCondition> = buildList {
+    add(RuleCondition.OtpTypeIs(otpType, Connector.AND))
+    if (sender.isNotBlank()) add(RuleCondition.SenderMatches(sender, Connector.AND))
+    if (body.isNotBlank()) add(RuleCondition.BodyContains(body, Connector.AND))
+}
+
 private suspend fun RecipientRepository.getAllRecipientsSnapshot(): List<Recipient> =
     getAllRecipients().firstOrNull().orEmpty()

@@ -116,7 +116,7 @@ fun EditRecipientScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(rule.name, style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "${rule.otpType.name} · priority ${rule.priority}",
+                            "${rule.otpType.name} \u00B7 priority ${rule.priority}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

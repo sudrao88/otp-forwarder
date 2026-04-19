@@ -29,6 +29,13 @@ interface RecipientDao {
     @Delete
     suspend fun deleteRecipient(recipient: RecipientEntity)
 
-    @Query("SELECT * FROM recipients WHERE id IN (SELECT recipientId FROM rule_recipient_cross_ref WHERE ruleId = :ruleId)")
+    @Query(
+        """
+        SELECT DISTINCT r.* FROM recipients r
+        INNER JOIN action_recipient_cross_ref x ON x.recipientId = r.id
+        INNER JOIN rule_actions a ON a.id = x.actionId
+        WHERE a.ruleId = :ruleId
+        """
+    )
     suspend fun getRecipientsForRule(ruleId: Long): List<RecipientEntity>
 }

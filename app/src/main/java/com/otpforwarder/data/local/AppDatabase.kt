@@ -8,10 +8,12 @@ import androidx.room.TypeConverters
     entities = [
         RecipientEntity::class,
         ForwardingRuleEntity::class,
-        RuleRecipientCrossRef::class,
+        RuleConditionEntity::class,
+        RuleActionEntity::class,
+        ActionRecipientCrossRef::class,
         OtpLogEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

@@ -5,13 +5,13 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 
 @Entity(
-    tableName = "rule_recipient_cross_ref",
-    primaryKeys = ["ruleId", "recipientId"],
+    tableName = "action_recipient_cross_ref",
+    primaryKeys = ["actionId", "recipientId"],
     foreignKeys = [
         ForeignKey(
-            entity = ForwardingRuleEntity::class,
+            entity = RuleActionEntity::class,
             parentColumns = ["id"],
-            childColumns = ["ruleId"],
+            childColumns = ["actionId"],
             onDelete = ForeignKey.CASCADE
         ),
         ForeignKey(
@@ -23,7 +23,7 @@ import androidx.room.Index
     ],
     indices = [Index(value = ["recipientId"])]
 )
-data class RuleRecipientCrossRef(
-    val ruleId: Long,
+data class ActionRecipientCrossRef(
+    val actionId: Long,
     val recipientId: Long
 )

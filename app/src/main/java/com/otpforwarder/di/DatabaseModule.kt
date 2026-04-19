@@ -6,6 +6,7 @@ import com.otpforwarder.data.local.AppDatabase
 import com.otpforwarder.data.local.ForwardingRuleDao
 import com.otpforwarder.data.local.OtpLogDao
 import com.otpforwarder.data.local.RecipientDao
+import com.otpforwarder.data.local.migrations.MIGRATION_1_2
 import com.otpforwarder.data.repository.ForwardingRuleRepositoryImpl
 import com.otpforwarder.data.repository.OtpLogRepositoryImpl
 import com.otpforwarder.data.repository.RecipientRepositoryImpl
@@ -30,7 +31,9 @@ object DatabaseModule {
             context,
             AppDatabase::class.java,
             "otp_forwarder_db"
-        ).build()
+        )
+            .addMigrations(MIGRATION_1_2)
+            .build()
 
     @Provides
     fun provideRecipientDao(database: AppDatabase): RecipientDao =
@@ -51,8 +54,11 @@ object DatabaseModule {
 
     @Provides
     @Singleton
-    fun provideForwardingRuleRepository(forwardingRuleDao: ForwardingRuleDao): ForwardingRuleRepository =
-        ForwardingRuleRepositoryImpl(forwardingRuleDao)
+    fun provideForwardingRuleRepository(
+        database: AppDatabase,
+        forwardingRuleDao: ForwardingRuleDao
+    ): ForwardingRuleRepository =
+        ForwardingRuleRepositoryImpl(database, forwardingRuleDao)
 
     @Provides
     @Singleton

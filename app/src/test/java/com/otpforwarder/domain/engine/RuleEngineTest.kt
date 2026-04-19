@@ -1,11 +1,15 @@
 package com.otpforwarder.domain.engine
 
 import com.otpforwarder.domain.model.ClassifierTier
+import com.otpforwarder.domain.model.Connector
 import com.otpforwarder.domain.model.ForwardingRule
 import com.otpforwarder.domain.model.Otp
 import com.otpforwarder.domain.model.OtpType
 import com.otpforwarder.domain.model.Recipient
+import com.otpforwarder.domain.model.RuleAction
+import com.otpforwarder.domain.model.RuleCondition
 import com.otpforwarder.domain.repository.ForwardingRuleRepository
+import com.otpforwarder.domain.repository.RecipientRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
@@ -14,6 +18,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
 
+/**
+ * Phase 1 tests cover the stub engine semantics: simple AND-of-all conditions,
+ * with `OtpType.ALL` acting as a wildcard. Phase 2 will replace these with the
+ * full left-to-right AND/OR truth table and additional edge cases.
+ */
 class RuleEngineTest {
 
     private val mom = Recipient(id = 1, name = "Mom", phoneNumber = "+911", isActive = true)
@@ -40,125 +49,155 @@ class RuleEngineTest {
         type: OtpType = OtpType.TRANSACTION,
         priority: Int = 1,
         senderFilter: String? = null,
-        bodyFilter: String? = null
-    ) = ForwardingRule(
-        id = id,
-        name = name,
-        otpType = type,
-        isEnabled = true,
-        priority = priority,
-        senderFilter = senderFilter,
-        bodyFilter = bodyFilter
-    )
+        bodyFilter: String? = null,
+        recipientIds: List<Long> = emptyList()
+    ): ForwardingRule {
+        val conditions = buildList {
+            add(RuleCondition.OtpTypeIs(type, Connector.AND))
+            senderFilter?.let { add(RuleCondition.SenderMatches(it, Connector.AND)) }
+            bodyFilter?.let { add(RuleCondition.BodyContains(it, Connector.AND)) }
+        }
+        return ForwardingRule(
+            id = id,
+            name = name,
+            isEnabled = true,
+            priority = priority,
+            conditions = conditions,
+            actions = listOf(RuleAction.ForwardSms(recipientIds))
+        )
+    }
 
-    /**
-     * Fake repository that returns [candidates] as-is from
-     * [getMatchingRulesWithRecipients]. Emulates the SQL query that already
-     * filters disabled rules/inactive recipients and handles type vs. ALL
-     * matching — the RuleEngine's remaining job is regex post-filtering.
-     */
-    private class FakeRepo(
-        private val candidates: List<Pair<ForwardingRule, List<Recipient>>>
+    private class FakeRuleRepo(
+        private val rules: List<ForwardingRule>
     ) : ForwardingRuleRepository {
-        override fun getAllRulesWithRecipients(): Flow<List<Pair<ForwardingRule, List<Recipient>>>> =
-            flowOf(candidates)
-
-        override fun getAllRules(): Flow<List<ForwardingRule>> =
-            flowOf(candidates.map { it.first })
-
+        override fun getAllRulesWithDetails(): Flow<List<ForwardingRule>> = flowOf(rules)
+        override fun getAllRules(): Flow<List<ForwardingRule>> = flowOf(rules)
         override suspend fun getRuleById(id: Long): ForwardingRule? =
-            candidates.firstOrNull { it.first.id == id }?.first
-
-        override suspend fun getRuleWithRecipientsById(id: Long): Pair<ForwardingRule, List<Recipient>>? =
-            candidates.firstOrNull { it.first.id == id }
-
-        override suspend fun getMatchingRulesWithRecipients(
-            otpType: OtpType
-        ): List<Pair<ForwardingRule, List<Recipient>>> = candidates
-
-        override suspend fun insertRule(rule: ForwardingRule, recipientIds: List<Long>): Long = 0
-        override suspend fun updateRule(rule: ForwardingRule, recipientIds: List<Long>) = Unit
+            rules.firstOrNull { it.id == id }
+        override suspend fun getRuleWithDetailsById(id: Long): ForwardingRule? =
+            rules.firstOrNull { it.id == id }
+        override suspend fun getEnabledRulesWithDetails(): List<ForwardingRule> =
+            rules.filter { it.isEnabled }
+        override suspend fun insertRule(rule: ForwardingRule): Long = 0
+        override suspend fun updateRule(rule: ForwardingRule) = Unit
         override suspend fun deleteRule(rule: ForwardingRule) = Unit
         override suspend fun getRuleIdsForRecipient(recipientId: Long): List<Long> = emptyList()
     }
 
+    private class FakeRecipientRepo(
+        private val recipients: List<Recipient>
+    ) : RecipientRepository {
+        override fun getAllRecipients(): Flow<List<Recipient>> = flowOf(recipients)
+        override suspend fun getRecipientById(id: Long): Recipient? =
+            recipients.firstOrNull { it.id == id }
+        override suspend fun getActiveRecipients(): List<Recipient> =
+            recipients.filter { it.isActive }
+        override suspend fun getRecipientsForRule(ruleId: Long): List<Recipient> = emptyList()
+        override suspend fun insertRecipient(recipient: Recipient): Long = 0
+        override suspend fun updateRecipient(recipient: Recipient) = Unit
+        override suspend fun deleteRecipient(recipient: Recipient) = Unit
+    }
+
     private fun evaluate(
-        candidates: List<Pair<ForwardingRule, List<Recipient>>>,
-        otp: Otp = otp()
-    ): List<Pair<ForwardingRule, List<Recipient>>> =
-        runBlocking { RuleEngine(FakeRepo(candidates)).evaluate(otp) }
+        rules: List<ForwardingRule>,
+        otp: Otp = otp(),
+        recipients: List<Recipient> = listOf(mom, dad, sis)
+    ): List<Pair<ForwardingRule, List<Recipient>>> = runBlocking {
+        RuleEngine(FakeRuleRepo(rules), FakeRecipientRepo(recipients)).evaluate(otp)
+    }
 
     @Test
-    fun `returns empty when repository yields no candidates`() {
+    fun `returns empty when no rules exist`() {
         assertTrue(evaluate(emptyList()).isEmpty())
     }
 
     @Test
-    fun `passes rule through when no filters are set`() {
-        val r = rule(1)
-        val result = evaluate(listOf(r to listOf(mom, dad)))
+    fun `passes rule when only OtpType condition matches`() {
+        val r = rule(1, recipientIds = listOf(mom.id, dad.id))
+        val result = evaluate(listOf(r))
         assertEquals(1, result.size)
-        assertEquals(r, result[0].first)
         assertEquals(listOf(mom, dad), result[0].second)
     }
 
     @Test
+    fun `OtpType ALL matches any otp type`() {
+        val r = rule(1, type = OtpType.ALL, recipientIds = listOf(mom.id))
+        OtpType.entries.forEach { t ->
+            val result = evaluate(listOf(r), otp = otp(type = t))
+            assertEquals("ALL did not match $t", 1, result.size)
+        }
+    }
+
+    @Test
+    fun `rejects rule when otp type does not match and is not ALL`() {
+        val r = rule(1, type = OtpType.LOGIN, recipientIds = listOf(mom.id))
+        val result = evaluate(listOf(r), otp = otp(type = OtpType.TRANSACTION))
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
     fun `matches sender filter when regex hits`() {
-        val r = rule(1, senderFilter = "HDFCBK.*")
-        val result = evaluate(listOf(r to listOf(mom)))
+        val r = rule(1, senderFilter = "HDFCBK.*", recipientIds = listOf(mom.id))
+        val result = evaluate(listOf(r))
         assertEquals(1, result.size)
     }
 
     @Test
     fun `rejects rule when sender filter does not match`() {
-        val r = rule(1, senderFilter = "SBIBNK.*")
-        val result = evaluate(listOf(r to listOf(mom)))
-        assertTrue(result.isEmpty())
+        val r = rule(1, senderFilter = "SBIBNK.*", recipientIds = listOf(mom.id))
+        assertTrue(evaluate(listOf(r)).isEmpty())
     }
 
     @Test
     fun `matches body filter when regex hits`() {
-        val r = rule(1, bodyFilter = ".*debited.*")
-        val result = evaluate(listOf(r to listOf(mom)))
-        assertEquals(1, result.size)
+        val r = rule(1, bodyFilter = ".*debited.*", recipientIds = listOf(mom.id))
+        assertEquals(1, evaluate(listOf(r)).size)
     }
 
     @Test
     fun `rejects rule when body filter does not match`() {
-        val r = rule(1, bodyFilter = ".*credited.*")
-        val result = evaluate(listOf(r to listOf(mom)))
-        assertTrue(result.isEmpty())
+        val r = rule(1, bodyFilter = ".*credited.*", recipientIds = listOf(mom.id))
+        assertTrue(evaluate(listOf(r)).isEmpty())
     }
 
     @Test
-    fun `requires both sender and body filters to match when both are set`() {
-        val both = rule(1, senderFilter = "HDFCBK.*", bodyFilter = ".*debited.*")
-        assertEquals(1, evaluate(listOf(both to listOf(mom))).size)
+    fun `requires every condition to match (AND semantics)`() {
+        val both = rule(1, senderFilter = "HDFCBK.*", bodyFilter = ".*debited.*", recipientIds = listOf(mom.id))
+        assertEquals(1, evaluate(listOf(both)).size)
 
-        val senderOnly = rule(2, senderFilter = "HDFCBK.*", bodyFilter = ".*credited.*")
-        assertTrue(evaluate(listOf(senderOnly to listOf(mom))).isEmpty())
+        val senderMismatch = rule(2, senderFilter = "SBIBNK.*", bodyFilter = ".*debited.*", recipientIds = listOf(mom.id))
+        assertTrue(evaluate(listOf(senderMismatch)).isEmpty())
 
-        val bodyOnly = rule(3, senderFilter = "SBIBNK.*", bodyFilter = ".*debited.*")
-        assertTrue(evaluate(listOf(bodyOnly to listOf(mom))).isEmpty())
+        val bodyMismatch = rule(3, senderFilter = "HDFCBK.*", bodyFilter = ".*credited.*", recipientIds = listOf(mom.id))
+        assertTrue(evaluate(listOf(bodyMismatch)).isEmpty())
     }
 
     @Test
     fun `treats invalid regex as non-match instead of throwing`() {
-        val r = rule(1, senderFilter = "[invalid(regex")
-        val result = evaluate(listOf(r to listOf(mom)))
-        assertTrue(result.isEmpty())
+        val r = rule(1, senderFilter = "[invalid(regex", recipientIds = listOf(mom.id))
+        assertTrue(evaluate(listOf(r)).isEmpty())
     }
 
     @Test
-    fun `returns every matching rule with its full recipient list when recipients overlap`() {
-        val r1 = rule(1, name = "High", priority = 1)
-        val r2 = rule(2, name = "Low", priority = 5)
-        val result = evaluate(
-            listOf(
-                r1 to listOf(mom, dad),
-                r2 to listOf(dad, sis)
-            )
-        )
+    fun `skips disabled rules`() {
+        val disabled = rule(1, recipientIds = listOf(mom.id)).copy(isEnabled = false)
+        assertTrue(evaluate(listOf(disabled)).isEmpty())
+    }
+
+    @Test
+    fun `excludes inactive recipients from the returned list`() {
+        val inactive = mom.copy(isActive = false)
+        val r = rule(1, recipientIds = listOf(mom.id, dad.id))
+        val result = evaluate(listOf(r), recipients = listOf(inactive, dad, sis))
+        assertEquals(1, result.size)
+        assertEquals(listOf(dad), result[0].second)
+    }
+
+    @Test
+    fun `returns each matching rule with its own recipient list`() {
+        val r1 = rule(1, name = "High", priority = 1, recipientIds = listOf(mom.id, dad.id))
+        val r2 = rule(2, name = "Low", priority = 5, recipientIds = listOf(dad.id, sis.id))
+        val result = evaluate(listOf(r1, r2))
         assertEquals(2, result.size)
         assertEquals("High", result[0].first.name)
         assertEquals(listOf(mom, dad), result[0].second)
@@ -167,55 +206,24 @@ class RuleEngineTest {
     }
 
     @Test
-    fun `keeps rule even when every recipient is shared with a higher-priority rule`() {
-        val r1 = rule(1, name = "High", priority = 1)
-        val r2 = rule(2, name = "Redundant", priority = 2)
-        val result = evaluate(
-            listOf(
-                r1 to listOf(mom, dad),
-                r2 to listOf(mom, dad)
-            )
+    fun `rule with zero conditions matches anything`() {
+        val empty = ForwardingRule(
+            id = 1,
+            name = "Catch-all",
+            isEnabled = true,
+            priority = 1,
+            conditions = emptyList(),
+            actions = listOf(RuleAction.ForwardSms(listOf(mom.id)))
         )
-        assertEquals(2, result.size)
-        assertEquals(listOf(mom, dad), result[0].second)
-        assertEquals(listOf(mom, dad), result[1].second)
-    }
-
-    @Test
-    fun `preserves priority order from repository`() {
-        // Simulates the DAO's ordering: typed rules first, then ALL, each ordered by priority.
-        val typed = rule(1, name = "Typed", type = OtpType.TRANSACTION, priority = 2)
-        val all = rule(2, name = "Catch-all", type = OtpType.ALL, priority = 1)
-        val result = evaluate(
-            listOf(
-                typed to listOf(mom),
-                all to listOf(dad)
-            )
-        )
-        assertEquals(listOf("Typed", "Catch-all"), result.map { it.first.name })
-    }
-
-    @Test
-    fun `applies filters and returns full recipient lists for each surviving rule`() {
-        val bankRule = rule(1, name = "Bank", priority = 1, senderFilter = "HDFCBK.*")
-        val allRule = rule(2, name = "All", type = OtpType.ALL, priority = 10)
-        val result = evaluate(
-            listOf(
-                bankRule to listOf(mom, dad),
-                allRule to listOf(mom, sis)
-            )
-        )
-        assertEquals(2, result.size)
-        assertEquals(listOf(mom, dad), result[0].second)
-        assertEquals(listOf(mom, sis), result[1].second)
+        val result = evaluate(listOf(empty), otp = otp(type = OtpType.UNKNOWN))
+        assertEquals(1, result.size)
     }
 
     @Test
     fun `sender filter evaluates against otp sender not message body`() {
-        val r = rule(1, senderFilter = "debited")
-        // Body contains "debited" but sender does not — should NOT match.
+        val r = rule(1, senderFilter = "debited", recipientIds = listOf(mom.id))
         val result = evaluate(
-            listOf(r to listOf(mom)),
+            listOf(r),
             otp = otp(sender = "HDFCBK", body = "Your a/c was debited. OTP 482910.")
         )
         assertTrue(result.isEmpty())
@@ -223,10 +231,9 @@ class RuleEngineTest {
 
     @Test
     fun `body filter evaluates against original message not sender`() {
-        val r = rule(1, bodyFilter = "HDFCBK")
-        // Sender contains "HDFCBK" but body does not — should NOT match.
+        val r = rule(1, bodyFilter = "HDFCBK", recipientIds = listOf(mom.id))
         val result = evaluate(
-            listOf(r to listOf(mom)),
+            listOf(r),
             otp = otp(sender = "HDFCBK", body = "Your code is 482910.")
         )
         assertTrue(result.isEmpty())

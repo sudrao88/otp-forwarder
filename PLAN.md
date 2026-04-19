@@ -1,584 +1,399 @@
-# OTP Forwarder - Android App Plan
+# OTP Forwarder — Multi-Condition / Multi-Action Rules
 
 ## Context
 
-Build a new Android app (new GitHub repo) that reads incoming SMS messages, detects OTPs, classifies them by type (transaction, login, parcel delivery, etc.), and forwards them via SMS to configured recipients based on a rule engine. The app is fully offline/local with on-device storage only.
+The current Add/Edit Rule screen forces a single OTP type and two optional regex filters, and the only outcome is "forward SMS to the rule's recipients." That model is too narrow:
 
-## Tech Stack
+- A user may want to match on multiple criteria (e.g., *parcel OTP AND from SWIGGY*, or *transaction OTP OR a body containing "credited"*).
+- OTP types and regexes should be presented in plain English so a non-technical user understands that `[sender]` / `[text]` are user-supplied values.
+- A rule should be able to trigger more than just an SMS forward — also "set the phone to loud mode" and "place a call."
 
-- **Language:** Kotlin
-- **UI:** Jetpack Compose + Material 3
-- **DI:** Hilt
-- **Database:** Room
-- **On-device AI:** Google AI Edge SDK (Gemini Nano, available on supported devices)
-- **Background:** Foreground Service (for immediate SMS processing) + WorkManager (retry failed sends)
-- **Architecture:** Single-module, MVVM with clean domain layer
-- **Min SDK:** 26 (Android 8.0), Target SDK: 35
+This redesign makes conditions and actions first-class, many-per-rule objects with a natural-language UI, and adds the infrastructure (permissions, use cases, action dispatcher) to execute the new action types silently in the background from the existing `OtpProcessingService` pipeline.
 
-## Project Structure
+Confirmed during planning:
 
-```
-otp-forwarder/
-├── .github/workflows/          # CI + release APK builds
-├── app/src/main/java/com/otpforwarder/
-│   ├── OtpForwarderApp.kt     # Application class (Hilt init)
-│   ├── MainActivity.kt
-│   ├── di/                     # Hilt modules
-│   ├── receiver/
-│   │   └── SmsReceiver.kt     # BroadcastReceiver entry point
-│   ├── service/
-│   │   └── OtpProcessingService.kt  # Short-lived foreground service
-│   ├── data/
-│   │   ├── local/              # Room DB, DAOs, Entities
-│   │   ├── repository/         # Repository implementations
-│   │   └── mapper/             # Entity <-> Domain mappers
-│   ├── domain/
-│   │   ├── model/              # Otp, OtpType, ForwardingRule, Recipient
-│   │   ├── detection/          # OtpDetector interface + RegexOtpDetector
-│   │   ├── classification/     # OtpClassifier interface + implementations
-│   │   │   ├── OtpClassifier.kt           # Interface
-│   │   │   ├── GeminiOtpClassifier.kt     # Gemini Nano (AI Edge SDK)
-│   │   │   ├── KeywordOtpClassifier.kt    # Weighted keyword scoring
-│   │   │   └── TieredOtpClassifier.kt     # Orchestrator: Gemini → Keyword fallback
-│   │   ├── engine/             # RuleEngine
-│   │   └── usecase/            # ProcessIncomingSms, ForwardOtp, ManageRules
-│   ├── ui/
-│   │   ├── navigation/         # NavGraph
-│   │   ├── theme/              # Material 3 theme
-│   │   ├── screen/             # home/, rules/, recipients/, settings/
-│   │   └── component/          # Shared composables
-│   └── util/                   # NotificationHelper, PermissionHelper
-├── gradle/libs.versions.toml   # Version catalog
-└── app/build.gradle.kts
-```
-
-## Data Model
-
-### Domain Models
-
-- **OtpType** enum: `ALL`, `TRANSACTION`, `LOGIN`, `PARCEL_DELIVERY`, `REGISTRATION`, `PASSWORD_RESET`, `GOVERNMENT`, `UNKNOWN`
-- **ClassifierTier** enum: `GEMINI_NANO`, `KEYWORD`
-- **Otp**: code, type, sender, originalMessage, detectedAt, confidence (0.0-1.0), classifierTier
-- **Recipient**: id, name, phoneNumber, isActive
-- **ForwardingRule**: id, name, otpType (`ALL` = match any type), isEnabled, priority (lower = higher), senderFilter (optional regex on sender), bodyFilter (optional regex on message body)
-
-### Room Entities
-
-- `recipients` table
-- `forwarding_rules` table (indexed on priority)
-- `rule_recipient_cross_ref` table (ruleId FK, recipientId FK — many-to-many join table)
-- `otp_log` table (denormalized with forwarding result info, auto-pruned beyond 12 hours)
-
-### Key Query
-
-```sql
-SELECT r.*, GROUP_CONCAT(rec.name) as recipientNames
-FROM forwarding_rules r
-JOIN rule_recipient_cross_ref xref ON r.id = xref.ruleId
-JOIN recipients rec ON xref.recipientId = rec.id
-WHERE r.isEnabled = 1 
-  AND rec.isActive = 1
-  AND (r.otpType = 'ALL' OR r.otpType = :otpType)
-GROUP BY r.id
-ORDER BY CASE WHEN r.otpType = 'ALL' THEN 1 ELSE 0 END, r.priority ASC
-```
-
-## OTP Detection & Classification Strategy
-
-### Detection (RegexOtpDetector)
-
-Two-layer approach:
-1. **Keyword pre-filter** (fast reject): check for words like `otp`, `code`, `verify`, `pin`, `one-time`, `passcode`
-2. **Regex extraction** with confidence levels:
-   - Explicit OTP patterns (confidence 0.95): `OTP is 123456`
-   - Contextual patterns (confidence 0.75): `code is 123456`
-   - Bare code with keyword context (confidence 0.50): fallback
-
-### Classification (Two-Tier)
-
-The `OtpClassifier` interface has two implementations, orchestrated by `TieredOtpClassifier`:
-
-#### Tier 1: Gemini Nano (`GeminiOtpClassifier`)
-
-- Uses **Google AI Edge SDK** with the on-device `GenerativeModel` (AICore backend)
-- Available on **Android 14+ (SDK 34+)** on supported devices (Pixel 8+, Samsung S24+, etc.)
-- Prompt-based classification — sends the SMS body with a structured prompt:
-  ```
-  Classify this SMS into exactly one category:
-  TRANSACTION, LOGIN, PARCEL_DELIVERY, REGISTRATION,
-  PASSWORD_RESET, GOVERNMENT, or UNKNOWN.
-  Reply with only the category name.
-
-  SMS: "{message body}"
-  ```
-- Check availability at runtime via `GenerativeModel.isAvailable()`
-- Latency: ~200-500ms, acceptable since processing runs in a foreground service
-
-#### Tier 2: Weighted Keyword Scoring (`KeywordOtpClassifier`)
-
-Fallback for all devices where Gemini Nano is unavailable. Uses **weighted multi-keyword scoring** instead of naive first-match:
-
-Each category has weighted keywords (higher weight = stronger signal):
-- TRANSACTION: `transaction` (0.9), `payment` (0.8), `debit` (0.9), `credit` (0.7), `credited` (0.9), `debited` (0.9), `INR` (0.8), `Rs.` (0.8), `bank` (0.4), `account` (0.3), `a/c` (0.7), `UPI` (0.8), `NEFT` (0.7), `IMPS` (0.7)
-- LOGIN: `log in` (0.9), `sign in` (0.9), `authenticate` (0.8), `2FA` (0.9), `two-factor` (0.9), `verification code` (0.6), `login` (0.8)
-- PARCEL_DELIVERY: `deliver` (0.8), `delivered` (0.9), `shipment` (0.9), `parcel` (0.9), `tracking` (0.8), `courier` (0.9), `dispatch` (0.7), `out for delivery` (1.0), `AWB` (0.9)
-- REGISTRATION: `register` (0.8), `sign up` (0.9), `signup` (0.9), `create account` (0.9), `new account` (0.8), `welcome` (0.4)
-- PASSWORD_RESET: `reset password` (1.0), `reset your password` (1.0), `forgot` (0.7), `recover` (0.7), `change password` (0.9)
-- GOVERNMENT: `Aadhaar` (1.0), `PAN` (0.8), `tax` (0.6), `govt` (0.7), `DigiLocker` (0.9), `UMANG` (0.9), `e-filing` (0.9), `ITR` (0.9)
-
-**Scoring logic:**
-1. Scan message body (case-insensitive) against all categories
-2. Sum matched keyword weights per category
-3. Highest scoring category wins, with a **minimum threshold of 0.5** — below it, classify as UNKNOWN
-4. On tie, prefer the more specific category (fewer total keywords matched = more specific)
-
-**Sender reputation boost:** Known sender ID prefixes add +0.5 to their category:
-- `HDFCBK`, `SBIBNK`, `ICICIB`, `AXISBK`, `KOTAKB` → TRANSACTION
-- `AMZNIN`, `FKRTIN`, `SWIGGY`, `ZOMATO` → PARCEL_DELIVERY
-- `IKITWT`, `GLOGIN`, `MSFTNO` → LOGIN
-- `GOVTIN`, `AABORL`, `ITDEPT` → GOVERNMENT
-- (Expandable — users can add custom sender mappings in a future version)
-
-#### Tier Orchestration (`TieredOtpClassifier`)
-
-```
-classify(sender, body) →
-  if GeminiOtpClassifier.isAvailable() →
-    result = GeminiOtpClassifier.classify(body)
-    if result parse succeeds → return result
-    else → fall through
-  return KeywordOtpClassifier.classify(sender, body)
-```
-
-Gemini failures (timeout, garbled output, unavailable) silently fall back to keyword scoring. The selected tier is logged in `OtpLogEntity` for observability.
-
-## Rule Engine Design
-
-- Rules are non-exclusive: OTP can match multiple rules → forwarded to multiple recipients
-- Each rule maps to multiple recipients (many-to-many)
-- Deduplication per-recipient across all matched rules
-- Optional `senderFilter` regex on SMS sender address
-- Optional `bodyFilter` regex on SMS message body
-- Both filters must match if both are set (AND logic)
-- Priority as tiebreaker within same specificity level
-- `otpType = ALL` means match any OTP type
-
-## Processing Pipeline
-
-```
-SMS_RECEIVED broadcast
-  → SmsReceiver (goAsync(), extract PDUs, start foreground service)
-    → OtpProcessingService (foreground, short-lived ~5s)
-      → ProcessIncomingSmsUseCase:
-        1. OtpDetector.detect()
-        2. TieredOtpClassifier.classify() → (OtpType, ClassifierTier)
-        3. RuleEngine.evaluate()
-        4. ForwardOtpUseCase → SmsManager.sendTextMessage()
-        5. Log to Room DB (including classifierTier)
-        6. Show notification
-      → stopSelf()
-  → (on failure) RetryWorker via WorkManager
-```
-
-## Screen Layouts
-
-### Navigation: Bottom Nav Bar (4 tabs)
-
-```
-[ Home ]  [ Rules ]  [ Recipients ]  [ Settings ]
-```
+- **Connector semantics**: per-pair AND/OR, evaluated strictly left-to-right (no precedence).
+- **Loud mode**: `RINGER_MODE_NORMAL` + `STREAM_RING` to max + exit Do Not Disturb if Notification Policy access is granted.
+- **Call targets**: reuse the existing `Recipient` table for both the forward and call actions.
 
 ---
 
-### Home Screen
+## Phase 1 — Domain model & Room schema
 
-Shows OTPs forwarded in the last 12 hours. Primary surface of the app.
+Goal: replace the flat `ForwardingRule` with ordered `conditions` + `actions`, migrate existing data non-destructively, and keep the app compiling at the data layer before touching business logic.
 
+### 1.1 Domain models (new / modified)
+
+`app/src/main/java/com/otpforwarder/domain/model/ForwardingRule.kt` — restructure:
+
+```kotlin
+data class ForwardingRule(
+    val id: Long = 0,
+    val name: String,
+    val isEnabled: Boolean = true,
+    val priority: Int,
+    val conditions: List<RuleCondition>,   // ordered; index 0 has no connector
+    val actions: List<RuleAction>
+)
+
+sealed interface RuleCondition {
+    val connector: Connector   // operator joining THIS condition to the previous one; ignored for index 0
+    data class OtpTypeIs(val type: OtpType, override val connector: Connector) : RuleCondition
+    data class SenderMatches(val pattern: String, override val connector: Connector) : RuleCondition
+    data class BodyContains(val pattern: String, override val connector: Connector) : RuleCondition
+}
+
+enum class Connector { AND, OR }
+
+sealed interface RuleAction {
+    data class ForwardSms(val recipientIds: List<Long>) : RuleAction
+    data object SetRingerLoud : RuleAction
+    data class PlaceCall(val recipientId: Long) : RuleAction
+}
 ```
-┌──────────────────────────────┐
-│  OTP Forwarder         [ON]  │  ← Top bar with master enable/disable toggle
-├──────────────────────────────┤
-│                              │
-│  Today                       │  ← Section header (relative date)
-│  ┌──────────────────────────┐│
-│  │ ● HDFC Bank        2m ago││  ← Sender + relative time
-│  │   Code: 482910           ││  ← Extracted OTP code
-│  │   LOGIN → Mom, Dad       ││  ← OTP type → forwarded recipients
-│  │   ✓ Sent                 ││  ← Status (Sent / Failed / Retrying)
-│  ├──────────────────────────┤│
-│  │ ● Amazon            1h ago│
-│  │   Code: 7731             ││
-│  │   PARCEL → Mom           ││
-│  │   ✓ Sent                 ││
-│  └──────────────────────────┘│
-│                              │
-│  Yesterday                   │  ← Only if within 12h window
-│  ┌──────────────────────────┐│
-│  │ ● SBI             11h ago││
-│  │   Code: 339201           ││
-│  │   TRANSACTION → Dad      ││
-│  │   ✗ Failed               ││  ← Tap to retry
-│  └──────────────────────────┘│
-│                              │
-│  ─ ─ ─ empty state ─ ─ ─    │  ← When no OTPs in last 12h:
-│  "No OTPs forwarded in the   │    illustration + message
-│   last 12 hours"             │
-│                              │
-├──────────────────────────────┤
-│ [ Home ]  [Rules] [Recip] [⚙]│
-└──────────────────────────────┘
-```
+
+Keep `OtpType` enum as-is. The `otpType`, `senderFilter`, `bodyFilter` fields on the old model are dropped — they become condition instances.
+
+New files: `domain/model/RuleCondition.kt`, `domain/model/RuleAction.kt`, `domain/model/Connector.kt`.
+
+### 1.2 Room schema (bump DB version 1 → 2)
+
+`app/src/main/java/com/otpforwarder/data/local/`:
+
+- **Modify** `ForwardingRuleEntity`: drop `otpType`, `senderFilter`, `bodyFilter` columns; keep `id`, `name`, `isEnabled`, `priority`.
+- **New** `RuleConditionEntity` (table `rule_conditions`):
+  - `id` PK, `ruleId` FK→rules (CASCADE), `orderIndex` Int, `connector` String ("AND"/"OR"),
+  - `conditionType` String ("OTP_TYPE"/"SENDER_REGEX"/"BODY_REGEX"),
+  - `otpTypeValue` String? (only for OTP_TYPE),
+  - `pattern` String? (only for SENDER_REGEX / BODY_REGEX).
+  - Indexed on `ruleId`.
+- **New** `RuleActionEntity` (table `rule_actions`):
+  - `id` PK, `ruleId` FK→rules (CASCADE), `orderIndex` Int,
+  - `actionType` String ("FORWARD_SMS"/"RINGER_LOUD"/"PLACE_CALL"),
+  - `callRecipientId` Long? (PLACE_CALL only, FK→recipients SET_NULL).
+  - Indexed on `ruleId`.
+- **Repurpose** `RuleRecipientCrossRef` → `ActionRecipientCrossRef` (`actionId` FK→`rule_actions` CASCADE, `recipientId` FK→`recipients` CASCADE). Primary key `(actionId, recipientId)`. This generalizes "which recipients does this forward action target".
+- **New** `RuleWithDetails` Room relation class aggregating rule + ordered conditions + ordered actions (+ per-forward-action recipients).
+- **Migration_1_2** (real migration, not destructive): for each existing rule, create conditions from its `otpType`/`senderFilter`/`bodyFilter` (with `AND` connectors), create one `FORWARD_SMS` action, and migrate its `rule_recipient_cross_ref` rows to `action_recipient_cross_ref` rows keyed on the new action id. Add migration to the Hilt `DatabaseModule` (`di/DatabaseModule.kt`).
+- Update `AppDatabase` entity list + `version = 2`, add `ruleConditionDao()` / `ruleActionDao()` or fold into `ForwardingRuleDao`.
+
+### 1.3 DAO changes
+
+`app/src/main/java/com/otpforwarder/data/local/ForwardingRuleDao.kt`:
+
+- Replace `getMatchingRulesWithRecipients(otpType)` with `getEnabledRulesWithDetails(): List<RuleWithDetails>` — type matching now happens in-memory via the condition engine (OtpType is one condition among many, and conditions can be OR-combined so a SQL pre-filter is incorrect).
+- Preserve ordering by `priority ASC` and insert/delete helpers for conditions + actions. Use `@Transaction` for writes so `deleteOldConditions → insert new ones` is atomic.
+
+### 1.4 Mappers
+
+`app/src/main/java/com/otpforwarder/data/mapper/ForwardingRuleMapper.kt` — rewrite:
+
+- `RuleWithDetails.toDomain()` builds a `ForwardingRule` with ordered `conditions` + `actions` (loading forward-action recipient ids from `ActionRecipientCrossRef`).
+- `ForwardingRule.toEntities()` returns `(ForwardingRuleEntity, List<RuleConditionEntity>, List<RuleActionEntity>, List<ActionRecipientCrossRef>)` — repository writes them in a transaction.
+
+### 1.5 Repository
+
+`data/repository/ForwardingRuleRepositoryImpl.kt` — transactional insert/update across rules + conditions + actions + xrefs. On update, delete old condition/action rows and reinsert (simpler than diffing; counts are tiny).
+
+### Phase 1 verification
+
+- `./gradlew assembleDebug` compiles.
+- Room schema JSON updates cleanly; no existing callers of the old DAO left dangling (stub the new engine entry point for now if needed).
 
 ---
 
-### Rules Screen
+## Phase 2 — Rule engine rewrite
 
-List of forwarding rules with FAB to add new ones. Tap a rule to edit.
+Goal: evaluate the new condition list and return each matching rule's full action list (not just recipients).
+
+`app/src/main/java/com/otpforwarder/domain/engine/RuleEngine.kt` — rewrite `matchesFilters` as `evaluateConditions`:
+
+1. Load all enabled rules via `getEnabledRulesWithDetails()`.
+2. For each rule, evaluate conditions left-to-right:
+   ```
+   result = eval(conditions[0])
+   for i in 1..conditions.lastIndex:
+       next = eval(conditions[i])
+       result = when (conditions[i].connector) { AND -> result && next; OR -> result || next }
+   ```
+3. Rules with zero conditions always match (user-visible warning in the UI, but don't block).
+4. Return matching rules with their full action list (not just recipients anymore).
+
+A single condition evaluator `fun RuleCondition.matches(otp: Otp): Boolean` handles the three sealed cases. Invalid regex silently evaluates to `false` (preserves current behavior, see `RuleEngine.matchesRegex` at `domain/engine/RuleEngine.kt:36`).
+
+### Phase 2 verification
+
+Unit tests in `app/src/test/java/.../RuleEngineTest.kt` (rewritten):
+- Left-to-right evaluation with mixed connectors, e.g. `[A(AND)B(OR)C]` truth table.
+- OtpType condition matching all `OtpType.entries` including `ALL`.
+- Regex condition with invalid pattern → `false`, rule doesn't crash.
+- Rule with zero conditions → always matches.
+
+`./gradlew test` passes.
+
+---
+
+## Phase 3 — Action dispatch
+
+Goal: replace the single `ForwardOtpUseCase` with three action-specific use cases and a dispatcher wired into the existing SMS processing pipeline.
+
+### 3.1 New use cases under `domain/usecase/actions/`
+
+- `ForwardSmsActionUseCase` — wraps existing `SmsSender`; iterates recipient ids, looks up `Recipient`, dedupes by `id`, calls `smsSender.send(...)`. This replaces today's `ForwardOtpUseCase` at `domain/usecase/ForwardOtpUseCase.kt:16`.
+- `SetRingerLoudActionUseCase` — injected `AudioManager` + `NotificationManager`:
+  - If `Build.VERSION.SDK_INT >= M` and `notificationManager.isNotificationPolicyAccessGranted`, call `setInterruptionFilter(INTERRUPTION_FILTER_ALL)`.
+  - `audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL`.
+  - `audioManager.setStreamVolume(STREAM_RING, getStreamMaxVolume(STREAM_RING), 0)`.
+- `PlaceCallActionUseCase` — uses `TelecomManager.placeCall(Uri.parse("tel:$number"), null)`. Guards on `PackageManager.checkSelfPermission(CALL_PHONE) == PERMISSION_GRANTED`; if not granted, marks the action as failed and logs. This works without a UI/activity, which matters because SMS processing runs in a foreground service.
+
+### 3.2 Dispatcher
+
+`ExecuteRuleActionsUseCase` — takes `(otp, actions)`, runs each action in sequence on `Dispatchers.Default` (or `Main` where Android framework requires it — `AudioManager` is fine on any thread), collects per-action success/failure, returns a result list.
+
+### 3.3 Hilt wiring
+
+`di/` modules — provide `AudioManager`, `NotificationManager`, `TelecomManager` from `@ApplicationContext`.
+
+### 3.4 Pipeline wire-up
+
+Modify `ProcessIncomingSmsUseCase` at `domain/usecase/ProcessIncomingSmsUseCase.kt:30`:
+
+- After `ruleEngine.evaluate(otp)` returns matching rules with actions, call `executeRuleActions(otp, rule.actions)` for each rule.
+- Deduplication: forward-action recipient dedup moves into `ForwardSmsActionUseCase` across all matched rules (pass an `alreadySentTo: MutableSet<Long>` through the loop, same as the current `attempted` map).
+- `OtpLogEntity` currently stores `ruleName`, `recipientNames`, `status` — extend `recipientNames` semantics to include a short per-action summary (e.g., `"Forwarded: Mom, Dad; Rang loudly; Called Dad"`). Keep the schema stable (no new columns) to avoid another migration.
+
+### Phase 3 verification
+
+- New unit test `ExecuteRuleActionsUseCaseTest.kt`:
+  - Dispatcher runs every action.
+  - Per-action failure isolation (e.g. `PlaceCall` fails without `CALL_PHONE` → forward still succeeds).
+- `./gradlew assembleDebug` + `./gradlew test` pass.
+
+---
+
+## Phase 4 — Android integration & permissions
+
+Goal: declare the new permissions, surface them in the onboarding / Settings UI, and ensure the foreground service has what it needs to execute actions silently.
+
+### 4.1 Manifest
+
+`app/src/main/AndroidManifest.xml` — add:
+
+```xml
+<uses-permission android:name="android.permission.CALL_PHONE" />
+<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+<uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+```
+
+(`ACCESS_NOTIFICATION_POLICY` is a special permission — granted via `Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS`, not at install.)
+
+### 4.2 Service
+
+`OtpProcessingService` at `service/OtpProcessingService.kt` — no structural change; it already runs actions via use cases, and the new dispatcher plugs into the existing pipeline. The service already holds a short foreground-service lifetime which is sufficient for the two new actions (audio manager is synchronous; `TelecomManager.placeCall` returns immediately and the call continues independent of the caller).
+
+### 4.3 Permission helper
+
+`util/PermissionHelper.kt` — extend:
+
+- Add `hasCallPhone()`, `hasNotificationPolicyAccess()`.
+- Expose a helper to launch `Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS` intent — invoked from Settings screen and from the rule editor when the user selects "loud mode" for the first time.
+
+### 4.4 Settings screen
+
+`ui/screen/settings/SettingsScreen.kt` — extend the Permissions section to show **Call phone** and **Do Not Disturb access** rows with the same pattern as existing rows; tapping a denied row opens the relevant system settings.
+
+### Phase 4 verification
+
+- Install on device, revoke `CALL_PHONE`, verify the Settings row shows denied and tap routes to system settings.
+- Notification Policy row routes to the correct special-access screen.
+
+---
+
+## Phase 5 — UI redesign: Edit Rule screen
+
+Goal: rewrite `EditRuleScreen` + `EditRuleViewModel` for the new model while keeping the route + nav args identical so `ui/navigation/NavGraph.kt` doesn't change.
+
+### 5.1 Layout
 
 ```
 ┌──────────────────────────────┐
-│  Forwarding Rules            │
+│ ← Add Rule                   │
 ├──────────────────────────────┤
-│                              │
-│  ┌──────────────────────────┐│
-│  │ Bank OTPs           [ON] ││  ← Rule name + enable toggle
-│  │ TRANSACTION → Mom, Dad   ││  ← OTP type → recipients
-│  │ Priority: 1              ││
-│  ├──────────────────────────┤│
-│  │ All Login OTPs      [ON] ││
-│  │ LOGIN → Dad              ││
-│  │ Priority: 2              ││
-│  ├──────────────────────────┤│
-│  │ Catch-all          [OFF] ││
-│  │ ALL → Mom                ││
-│  │ Priority: 10             ││
-│  └──────────────────────────┘│
-│                              │
-│                         [+]  │  ← FAB to add rule
-├──────────────────────────────┤
-│ [Home]  [ Rules ] [Recip] [⚙]│
-└──────────────────────────────┘
-```
-
-**Add/Edit Rule (bottom sheet or new screen):**
-
-```
-┌──────────────────────────────┐
-│  ← Add Rule                  │
-├──────────────────────────────┤
-│                              │
 │  Rule Name                   │
-│  [ Bank OTPs               ]│
+│  [ Bank OTPs               ] │
 │                              │
-│  OTP Type                    │
-│  [ TRANSACTION          ▼  ]│  ← Dropdown: ALL, TRANSACTION, LOGIN, etc.
+│  If the message...           │   ← section header
+│  ┌──────────────────────────┐│
+│  │ Is a payment OTP      [x]││   ← condition chip/row, [x] removes
+│  └──────────────────────────┘│
+│         [ AND ▾ ]             │   ← connector button; tap toggles AND/OR
+│  ┌──────────────────────────┐│
+│  │ is from [ HDFCBK ]    [x]││   ← inline text field inside row
+│  └──────────────────────────┘│
+│         [ OR  ▾ ]             │
+│  ┌──────────────────────────┐│
+│  │ has [ credited ] in the  ││
+│  │ body                  [x]││
+│  └──────────────────────────┘│
+│  [ + Add condition ]         │
 │                              │
-│  Recipients                  │
-│  [✓] Mom                     │  ← Multi-select checklist
-│  [✓] Dad                     │
-│  [ ] Sister                  │
-│  [ + Add new recipient ]     │  ← Opens add recipient bottom sheet inline
+│  Then...                     │   ← section header
+│  ┌──────────────────────────┐│
+│  │ Forward the text to      ││
+│  │   [✓] Mom                ││
+│  │   [✓] Dad                ││
+│  │   [ + Add recipient ]  [x]││
+│  └──────────────────────────┘│
+│  ┌──────────────────────────┐│
+│  │ Set the phone to loud    ││
+│  │ mode                   [x]││
+│  └──────────────────────────┘│
+│  ┌──────────────────────────┐│
+│  │ Place a call to          ││
+│  │ [ Dad          ▾ ]     [x]││
+│  └──────────────────────────┘│
+│  [ + Add action ]            │
 │                              │
-│  Priority                    │
-│  [ 1                       ]│
-│                              │
-│  Filters (optional)          │
-│  Sender regex                │
-│  [ HDFCBK.*              ]│  ← Match on SMS sender
-│  Body regex                  │
-│  [ .*credited.*           ]│  ← Match on SMS body
-│                              │
-│         [ Save Rule ]        │
+│        [ Save Rule ]         │
 └──────────────────────────────┘
 ```
 
----
+### 5.2 Condition row copy (plain English)
 
-### Recipients Screen
+OtpType options in the "Add condition" menu:
 
-Tap a recipient to edit. Shows which rules they belong to.
+- `TRANSACTION` → **"Is a payment OTP"**
+- `LOGIN` → **"Is a login OTP"**
+- `PARCEL_DELIVERY` → **"Is a parcel delivery OTP"**
+- `REGISTRATION` → **"Is a registration OTP"**
+- `PASSWORD_RESET` → **"Is a password reset OTP"**
+- `GOVERNMENT` → **"Is a government OTP"**
+- `ALL` → **"Is any OTP"**
+- `UNKNOWN` → hidden from the picker (internal).
 
-```
-┌──────────────────────────────┐
-│  Recipients                  │
-├──────────────────────────────┤
-│                              │
-│  ┌──────────────────────────┐│
-│  │ Mom                 [ON] ││  ← Name + active toggle
-│  │ +91 98765 43210          ││  ← Phone number
-│  │ Rules: Bank OTPs, Catch… ││  ← Associated rules summary
-│  ├──────────────────────────┤│
-│  │ Dad                 [ON] ││
-│  │ +91 98765 43211          ││
-│  │ Rules: Bank OTPs, Login… ││
-│  └──────────────────────────┘│
-│                              │
-│                         [+]  │  ← FAB to add recipient
-├──────────────────────────────┤
-│ [Home]  [Rules]  [ Recip ] [⚙]│
-└──────────────────────────────┘
-```
+Sender / body conditions render with an inline `OutlinedTextField` so it's obvious the bracketed value is user-controlled:
 
-**Add/Edit Recipient (bottom sheet or new screen):**
+- `is from [ _____ ]` with placeholder `"e.g. HDFCBK"` and helper text *"Matches the SMS sender. Supports regex."*
+- `has [ _____ ] in the body` with placeholder `"e.g. credited"` and helper text *"Matches text anywhere in the SMS. Supports regex."*
 
-```
-┌──────────────────────────────┐
-│  ← Edit Recipient            │
-├──────────────────────────────┤
-│  Name                        │
-│  [ Mom                     ]│
-│                              │
-│  Phone Number                │
-│  [ +91 98765 43210        ]│
-│                              │
-│  Assigned Rules              │
-│  [✓] Bank OTPs              │  ← Multi-select checklist
-│  [ ] Login OTPs             │
-│  [✓] Catch-all              │
-│  [ + Add new rule ]          │  ← Navigates to Add Rule screen
-│                              │    with this recipient pre-checked
-│       [ Save Recipient ]     │
-└──────────────────────────────┘
+Put a short helper label under the "If the message..." header: *"The message must match these conditions. Tap AND / OR between them to change how they combine."*
+
+### 5.3 Action row copy
+
+In the "Add action" menu:
+
+- **"Forward the text to..."** → opens the existing recipient multi-select (reused component).
+- **"Set the phone to loud mode"** → no config; on add, if `hasNotificationPolicyAccess() == false`, show an inline prompt with a **"Grant"** button that routes to Notification Policy settings (non-blocking — user can still save the rule without the grant; execution will fall back to ringer-only).
+- **"Place a call to..."** → recipient dropdown (single-select from `Recipient` list, including an inline "+ Add recipient"). On add, if `hasCallPhone() == false`, show an inline prompt with a **"Grant"** button that requests the runtime permission via the existing permission launcher pattern.
+
+### 5.4 ViewModel
+
+Rewrite `EditRuleViewModel` to hold:
+
+```kotlin
+data class EditRuleUiState(
+    val isEditing: Boolean,
+    val name: String,
+    val nameError: String?,
+    val conditions: List<ConditionUi>,   // ordered
+    val actions: List<ActionUi>,         // ordered
+    val allRecipients: List<Recipient>,
+    val priority: String,                 // kept for tie-break ordering
+    val showLoudModePermissionHint: Boolean,
+    val showCallPermissionHint: Boolean
+)
 ```
 
----
+`ConditionUi` / `ActionUi` are UI-local sealed types mirroring the domain sealed types plus transient fields (e.g., per-field error strings). The VM exposes `addCondition(type)`, `updateCondition(index, …)`, `toggleConnector(index)`, `removeCondition(index)`, and the action equivalents. `save()` validates: name non-blank, at least one condition, at least one action, at least one recipient selected on each forward action, non-null recipient on each call action, no blank regex patterns.
 
-### Settings Screen
+### 5.5 Rules list
 
-```
-┌──────────────────────────────┐
-│  Settings                    │
-├──────────────────────────────┤
-│                              │
-│  Permissions                 │
-│  ┌──────────────────────────┐│
-│  │ Receive SMS     ✓ Granted││
-│  │ Send SMS        ✓ Granted││
-│  │ Notifications   ✗ Denied ││  ← Tap to open system settings
-│  └──────────────────────────┘│
-│                              │
-│  Classification              │
-│  ┌──────────────────────────┐│
-│  │ Active: Gemini Nano      ││  ← or "Keyword Scoring"
-│  │ Gemini Nano: Available   ││  ← or "Unavailable (device
-│  │                          ││     not supported)"
-│  └──────────────────────────┘│
-│                              │
-│  Forwarding                  │
-│  ┌──────────────────────────┐│
-│  │ Include original message ││
-│  │ in forwarded SMS    [ON] ││
-│  └──────────────────────────┘│
-│                              │
-│  About                       │
-│  ┌──────────────────────────┐│
-│  │ Version 1.0.0            ││
-│  │ View on GitHub →         ││
-│  └──────────────────────────┘│
-│                              │
-├──────────────────────────────┤
-│ [Home]  [Rules] [Recip]  [⚙] │
-└──────────────────────────────┘
-```
+`RulesScreen.kt` / `RulesViewModel.kt` card subtitle changes from `"TRANSACTION → Mom, Dad"` to a one-line summary:
+
+> `If payment OTP AND from HDFCBK · Forwards to Mom, Dad · Rings loudly`
+
+Truncate with ellipsis; full detail still visible on tap.
+
+### Phase 5 verification
+
+- Launch app, create a rule with 3 conditions mixed AND/OR and 3 actions via the new UI.
+- Edit an existing (migrated) rule: verify it round-trips through the new editor without data loss.
+- Rules list subtitle renders correctly for migrated and new rules.
 
 ---
 
-### First Launch / Permission Onboarding
+## Phase 6 — Tests & end-to-end verification
 
-Shown once before the app is usable.
+Goal: lock in correctness with tests and a device smoke run before shipping.
 
-```
-┌──────────────────────────────┐
-│                              │
-│       📱 OTP Forwarder       │
-│                              │
-│  This app needs permission   │
-│  to read and send SMS to     │
-│  forward your OTPs.          │
-│                              │
-│  ○ Receive SMS               │
-│  ○ Send SMS                  │
-│  ○ Notifications             │
-│                              │
-│    [ Grant Permissions ]     │
-│                              │
-└──────────────────────────────┘
-```
+### 6.1 Automated tests
 
-## Implementation Phases
+- `RuleEngineTest.kt` (from Phase 2) — multi-condition AND/OR, empty conditions, invalid regex, all `OtpType` values.
+- `ExecuteRuleActionsUseCaseTest.kt` (from Phase 3) — dispatcher fan-out + per-action failure isolation.
+- **Migration_1_2 test**: construct an in-memory DB with v1 data (via `MigrationTestHelper` from `androidx.room:room-testing`), run migration, assert:
+  - Rule row preserved (id, name, priority, enabled).
+  - One condition row per populated filter, connector `AND`, correct order.
+  - One `FORWARD_SMS` action row with the original recipients in `ActionRecipientCrossRef`.
 
-Each phase should be run in a **new conversation** (`/clear` or new terminal). Copy the prompt below into Claude Code.
+Run with `./gradlew test` (and `./gradlew connectedDebugAndroidTest` for the Room migration test if it requires instrumentation).
 
----
+### 6.2 Manual device smoke test
 
-### Phase 1: Project Skeleton ← START HERE
+1. Create a rule with 3 conditions mixed AND/OR and 3 actions.
+2. Send a test SMS matching the rule: `adb emu sms send TESTSND "Your OTP is 123456, payment of Rs.500 credited"`.
+3. Verify:
+   - Home screen log shows rule fired with the compact multi-action summary.
+   - Forward SMS arrives on the target device.
+   - Phone ringer is loud (set to silent beforehand).
+   - Outbound call is placed to the configured recipient.
+4. Toggle a connector from AND to OR and re-send a borderline SMS to verify evaluation shifts.
 
-**What to build:**
-- Android project with Gradle Kotlin DSL and version catalog (`gradle/libs.versions.toml`)
-- All dependencies: Compose BOM, Material 3, Hilt, Room, Navigation Compose, WorkManager
-- `OtpForwarderApp.kt` application class with `@HiltAndroidApp`
-- `MainActivity.kt` with `@AndroidEntryPoint`, sets Compose content
-- Material 3 theme (`ui/theme/`)
-- Bottom navigation scaffold with 4 tabs: Home, Rules, Recipients, Settings
-- Placeholder composable screen for each tab
-- `AndroidManifest.xml` with application and activity declaration
-- Verify `./gradlew assembleDebug` passes
+### 6.3 Permission flows
 
-**Prompt:**
-```
-Read PLAN.md and CLAUDE.md. Implement Phase 1: Project Skeleton.
+- Revoke `CALL_PHONE`: verify in-app hint shows on the rule editor, verify saved call action marks as failed (not crashing) at execution time.
+- Revoke Notification Policy access: verify loud-mode action degrades to ringer-only.
 
-Create the full Android project structure from scratch. Set up Gradle with Kotlin DSL and a version catalog (gradle/libs.versions.toml) for all dependencies: Compose BOM, Material 3, Hilt, Room, Navigation Compose, WorkManager. Create the Application class with @HiltAndroidApp, MainActivity with @AndroidEntryPoint, Material 3 theme, and a bottom navigation scaffold with 4 tabs (Home, Rules, Recipients, Settings) each with a placeholder composable. Set up AndroidManifest.xml.
+### 6.4 Upgrade test
 
-Run ./gradlew assembleDebug after each major file to catch errors early. Fix any errors before moving on. Commit when done.
-```
+Install a v1 build with seeded rules + recipients, upgrade to the v2 build in place, verify old rules still fire with equivalent behavior (single condition from old `otpType`, optional sender/body conditions, single forward action with the same recipients).
 
 ---
 
-### Phase 2: Data Layer
+## Reused components & helpers
 
-**What to build:**
-- Domain models: `OtpType` enum (with `ALL`), `Otp`, `Recipient`, `ForwardingRule`
-- Room entities: `RecipientEntity`, `ForwardingRuleEntity`, `RuleRecipientCrossRef`, `OtpLogEntity`
-- Room DAOs: `RecipientDao`, `ForwardingRuleDao`, `OtpLogDao` with the key query from the plan
-- `AppDatabase` with all entities and type converters
-- Repository interfaces in `domain/` and implementations in `data/repository/`
-- Entity ↔ domain mappers in `data/mapper/`
-- Hilt module to provide database and DAOs
-
-**Prompt:**
-```
-Read PLAN.md and CLAUDE.md. Implement Phase 2: Data Layer.
-
-Create domain models: OtpType enum (ALL, TRANSACTION, LOGIN, PARCEL_DELIVERY, REGISTRATION, PASSWORD_RESET, GOVERNMENT, UNKNOWN), Otp, Recipient, ForwardingRule (with senderFilter and bodyFilter). Create Room entities: RecipientEntity, ForwardingRuleEntity, RuleRecipientCrossRef (many-to-many join table), OtpLogEntity (auto-pruned beyond 12 hours). Create DAOs with the key query from PLAN.md. Create AppDatabase, repository interfaces and implementations, entity-to-domain mappers, and a Hilt module for DI.
-
-Run ./gradlew assembleDebug after each major file. Fix errors before moving on. Commit when done.
-```
+- `SmsSender` (`domain/sms/SmsSender.kt`) — reused verbatim by `ForwardSmsActionUseCase`.
+- Recipient repository, `InlineAddRecipientSheet` composable in `EditRuleScreen.kt:225` — reused for the forward/call recipient pickers.
+- `NotificationHelper` in `util/NotificationHelper.kt` — reused; `notifyForwarded` gets a small label tweak to say "1 rule fired" regardless of action type, since non-SMS actions don't have a recipient list.
+- The `inFlight` / `scope.launch` pattern in `OtpProcessingService.kt:50` — unchanged; the new dispatcher just runs more suspend work inside the existing scope.
+- Existing `OtpLogEntity` — reused; `recipientNames` column now carries a compact multi-action summary.
+- Permission prompt pattern in `ui/screen/onboarding/` — reused for the two new permissions.
 
 ---
 
-### Phase 3: OTP Detection & Classification
+## Critical files to modify
 
-**What to build:**
-- `OtpDetector` interface with `detect(sender: String, body: String): Otp?`
-- `RegexOtpDetector` implementation with two-layer approach: keyword pre-filter + regex extraction with confidence levels (0.95, 0.75, 0.50)
-- `ClassifierTier` enum: `GEMINI_NANO`, `KEYWORD`
-- `OtpClassifier` interface with `suspend fun classify(sender: String, body: String): Pair<OtpType, ClassifierTier>`
-- `GeminiOtpClassifier`: uses Google AI Edge SDK `GenerativeModel` with structured prompt, checks availability at runtime
-- `KeywordOtpClassifier`: weighted multi-keyword scoring with sender reputation boost (see keyword weights and sender mappings in plan)
-- `TieredOtpClassifier`: orchestrator that tries Gemini first, falls back to keyword scoring on failure/unavailability
-- Add `com.google.ai.edge:generative-ai` dependency to version catalog
-- Unit tests for detection (confidence levels, edge cases) and keyword classifier (each OTP type, scoring, sender boost, ties, threshold)
-
-**Prompt:**
-```
-Read PLAN.md and CLAUDE.md. Implement Phase 3: OTP Detection & Classification.
-
-Create OtpDetector interface and RegexOtpDetector with two-layer detection: keyword pre-filter (otp, code, verify, pin, one-time, passcode) then regex extraction with confidence levels (0.95 for explicit "OTP is 123456", 0.75 for "code is 123456", 0.50 for bare code with keyword context).
-
-Create the two-tier classification system:
-1. OtpClassifier interface with `suspend fun classify(sender: String, body: String): Pair<OtpType, ClassifierTier>`
-2. GeminiOtpClassifier — uses Google AI Edge SDK GenerativeModel to prompt Gemini Nano for classification. Check isAvailable() at runtime. Parse the response to an OtpType, falling through on any failure.
-3. KeywordOtpClassifier — weighted multi-keyword scoring per the plan: each keyword has a weight, scores are summed per category, highest wins above 0.5 threshold. Add sender reputation boost (+0.5) for known sender ID prefixes.
-4. TieredOtpClassifier — tries Gemini first, silent fallback to keyword on failure/unavailability. Returns the tier used alongside the classification.
-
-Add ClassifierTier enum (GEMINI_NANO, KEYWORD) to domain/model/. Add the classifierTier field to the Otp model. Add com.google.ai.edge:generative-ai to the version catalog.
-
-Write unit tests for RegexOtpDetector and KeywordOtpClassifier. Cover each OTP type, scoring logic, sender reputation boost, tie-breaking, minimum threshold, and edge cases.
-
-Run ./gradlew assembleDebug and ./gradlew test after changes. Fix errors before moving on. Commit when done.
-```
-
----
-
-### Phase 4: Rule Engine
-
-**What to build:**
-- `RuleEngine` class: takes an `Otp`, queries matching rules, returns list of `(ForwardingRule, List<Recipient>)` pairs
-- Matching logic: otpType match (or ALL), senderFilter regex, bodyFilter regex, AND logic for both filters
-- Deduplication: same recipient across multiple rules only gets one forward
-- Priority ordering: specific type rules before ALL, then by priority number
-- `ForwardOtpUseCase`: takes Otp + recipient, sends SMS via `SmsManager.sendTextMessage()`
-- `ProcessIncomingSmsUseCase`: orchestrates detect → classify (via TieredOtpClassifier) → evaluate rules → forward → log to DB (including classifierTier)
-- Unit tests for RuleEngine: test type matching, filter matching, deduplication, priority ordering
-
-**Prompt:**
-```
-Read PLAN.md and CLAUDE.md. Implement Phase 4: Rule Engine.
-
-Create RuleEngine that evaluates an Otp against forwarding rules: match on otpType (or ALL), apply senderFilter and bodyFilter regex (AND logic if both set), deduplicate recipients across matched rules, order by specificity then priority. Create ForwardOtpUseCase (sends SMS via SmsManager) and ProcessIncomingSmsUseCase (orchestrates: detect → classify → evaluate rules → forward → log to Room DB). Write unit tests for RuleEngine covering type matching, filter matching, deduplication, and priority ordering.
-
-Run ./gradlew assembleDebug and ./gradlew test after changes. Fix errors before moving on. Commit when done.
-```
-
----
-
-### Phase 5: Android Integration
-
-**What to build:**
-- `AndroidManifest.xml` permissions: `RECEIVE_SMS`, `SEND_SMS`, `POST_NOTIFICATIONS`
-- `SmsReceiver` BroadcastReceiver: registered for `SMS_RECEIVED`, uses `goAsync()`, extracts PDUs, starts foreground service
-- `OtpProcessingService` foreground service: short-lived (~5s), calls `ProcessIncomingSmsUseCase`, then `stopSelf()`
-- `NotificationHelper`: creates notification channel, shows forwarding result notifications
-- `PermissionHelper`: checks and requests runtime permissions
-- `RetryWorker` (WorkManager): retries failed SMS forwards with exponential backoff
-- Register receiver, service, and worker in manifest
-
-**Prompt:**
-```
-Read PLAN.md and CLAUDE.md. Implement Phase 5: Android Integration.
-
-Add manifest permissions (RECEIVE_SMS, SEND_SMS, POST_NOTIFICATIONS). Create SmsReceiver BroadcastReceiver that listens for SMS_RECEIVED, uses goAsync(), extracts PDUs, and starts the foreground service. Create OtpProcessingService as a short-lived foreground service that calls ProcessIncomingSmsUseCase then stopSelf(). Create NotificationHelper (channel setup + forwarding result notifications), PermissionHelper (runtime permission checks/requests), and RetryWorker (WorkManager with exponential backoff for failed forwards). Register everything in AndroidManifest.xml.
-
-Run ./gradlew assembleDebug after changes. Fix errors before moving on. Commit when done.
-```
-
----
-
-### Phase 6: Compose UI
-
-**What to build:**
-- **Home screen**: LazyColumn showing OTPs forwarded in last 12h, grouped by relative date (Today/Yesterday). Each card shows sender, relative time, OTP code, type, forwarded recipients, status (Sent/Failed/Retrying). Tap failed to retry. Master enable/disable toggle in top bar. Empty state when no OTPs.
-- **Rules screen**: LazyColumn of rule cards showing name, enable toggle, OTP type, assigned recipient names, priority. FAB to add. Tap to edit.
-- **Add/Edit Rule screen**: Form with rule name, OTP type dropdown (ALL + all types), multi-select recipient checklist, `[ + Add new recipient ]` button (opens inline bottom sheet to create recipient), priority field, sender regex field, body regex field. Save button.
-- **Recipients screen**: LazyColumn of recipient cards showing name, active toggle, phone number, associated rule names. FAB to add. Tap to edit.
-- **Add/Edit Recipient screen**: Form with name, phone number, multi-select rule checklist, `[ + Add new rule ]` button (navigates to Add Rule screen with this recipient pre-checked). Save button.
-- **Settings screen**: Permission status list (tap denied to open system settings), classification status section (shows active tier — "Gemini Nano" or "Keyword Scoring" — and Gemini Nano availability), "Include original message" toggle, app version, GitHub link.
-- **Permission onboarding screen**: Shown on first launch when permissions not granted. Lists required permissions with Grant button.
-- ViewModels for each screen with Hilt `@HiltViewModel`
-
-**Prompt:**
-```
-Read PLAN.md and CLAUDE.md. Implement Phase 6: Compose UI. Refer to the Screen Layouts section in PLAN.md for exact layout specs.
-
-Build all screens:
-1. Home: LazyColumn of OTPs from last 12h, grouped by date, each card shows sender/time/code/type/recipients/status, tap failed to retry, master on/off toggle in top bar, empty state.
-2. Rules list: cards with name/toggle/type/recipients/priority, FAB to add, tap to edit.
-3. Add/Edit Rule: name, OTP type dropdown, multi-select recipient checklist with "Add new recipient" (inline bottom sheet), priority, sender regex, body regex, save button.
-4. Recipients list: cards with name/toggle/phone/rules, FAB to add, tap to edit.
-5. Add/Edit Recipient: name, phone, multi-select rule checklist with "Add new rule" (navigates to Add Rule with recipient pre-checked), save button.
-6. Settings: permission status, classification status (active tier + Gemini Nano availability), include original message toggle, about section.
-7. Permission onboarding: first launch flow.
-
-Create @HiltViewModel for each screen. Run ./gradlew assembleDebug after each screen. Fix errors before moving on. Commit when done.
-```
-
----
-
-### Phase 7: Polish & Release
-
-**What to build:**
-- Error handling: try/catch around SMS send, graceful handling of missing permissions, invalid regex in filters
-- ProGuard/R8 rules for Room, Hilt, Kotlin serialization
-- GitHub Actions CI workflow: build on push/PR, run tests, upload debug APK as artifact
-- README.md with app description, screenshots placeholder, build instructions, permissions explanation
-- Tag `v1.0.0`, build release APK
-
-**Prompt:**
-```
-Read PLAN.md and CLAUDE.md. Implement Phase 7: Polish & Release.
-
-Add error handling: try/catch around SMS sends, graceful handling of missing permissions, invalid regex in rule filters. Add ProGuard/R8 rules for Room, Hilt, and Kotlin serialization. Create .github/workflows/ci.yml (build + test on push/PR, upload debug APK artifact). Create README.md with app description, feature list, build instructions, and permissions explanation. Verify everything builds cleanly with ./gradlew assembleDebug and ./gradlew test.
-
-Commit when done.
-```
+| File | Change | Phase |
+| --- | --- | --- |
+| `domain/model/ForwardingRule.kt` | Replace flat fields with `conditions` + `actions` sealed hierarchies | 1 |
+| `domain/model/` (new) `RuleCondition.kt`, `RuleAction.kt`, `Connector.kt` | New sealed types + enum | 1 |
+| `data/local/ForwardingRuleEntity.kt` | Drop otpType/senderFilter/bodyFilter columns | 1 |
+| `data/local/` (new) `RuleConditionEntity.kt`, `RuleActionEntity.kt`, `ActionRecipientCrossRef.kt` | New tables | 1 |
+| `data/local/RuleRecipientCrossRef.kt` | Delete (replaced by `ActionRecipientCrossRef.kt`) | 1 |
+| `data/local/AppDatabase.kt` | Bump to v2, update entity list, register `Migration_1_2` via `DatabaseModule` | 1 |
+| `data/local/ForwardingRuleDao.kt` | Replace SQL join query with `getEnabledRulesWithDetails()`; add condition + action CRUD | 1 |
+| `data/mapper/ForwardingRuleMapper.kt` | Rewrite to map the new aggregate | 1 |
+| `data/repository/ForwardingRuleRepositoryImpl.kt` | Transactional insert/update across rules + conditions + actions + xrefs | 1 |
+| `domain/engine/RuleEngine.kt` | Replace `matchesFilters` with left-to-right condition evaluation | 2 |
+| `domain/usecase/ForwardOtpUseCase.kt` | Move into `actions/ForwardSmsActionUseCase.kt` | 3 |
+| `domain/usecase/actions/` (new) `SetRingerLoudActionUseCase.kt`, `PlaceCallActionUseCase.kt`, `ExecuteRuleActionsUseCase.kt` | Three action use cases + dispatcher | 3 |
+| `domain/usecase/ProcessIncomingSmsUseCase.kt` | Call dispatcher instead of direct SMS forward; share dedup set | 3 |
+| `di/` Hilt modules | Provide `AudioManager`, `NotificationManager`, `TelecomManager` from `@ApplicationContext` | 3 |
+| `util/PermissionHelper.kt` | Add `CALL_PHONE` + Notification Policy helpers | 4 |
+| `AndroidManifest.xml` | Add 3 new `<uses-permission>` entries | 4 |
+| `ui/screen/settings/SettingsScreen.kt` / VM | Add two permission rows (CALL_PHONE, Notification Policy) | 4 |
+| `ui/screen/rules/EditRuleScreen.kt` | Full rewrite matching new layout | 5 |
+| `ui/screen/rules/EditRuleViewModel.kt` | Full rewrite with condition/action lists | 5 |
+| `ui/screen/rules/RulesScreen.kt` | Update card subtitle generator | 5 |
+| `app/src/test/java/.../RuleEngineTest.kt` | Rewrite: cover multi-condition AND/OR, empty conditions, regex failure | 2 / 6 |
+| `app/src/test/java/.../ExecuteRuleActionsUseCaseTest.kt` (new) | Cover dispatcher fan-out + per-action failure isolation | 3 / 6 |
+| `app/src/androidTest/.../MigrationTest.kt` (new) | Validate `Migration_1_2` with `MigrationTestHelper` | 6 |

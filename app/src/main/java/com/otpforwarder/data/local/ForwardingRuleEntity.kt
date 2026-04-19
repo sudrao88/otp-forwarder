@@ -12,9 +12,6 @@ data class ForwardingRuleEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val name: String,
-    val otpType: String,
     val isEnabled: Boolean = true,
-    val priority: Int,
-    val senderFilter: String? = null,
-    val bodyFilter: String? = null
+    val priority: Int
 )

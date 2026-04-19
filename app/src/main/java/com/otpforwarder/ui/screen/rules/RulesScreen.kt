@@ -78,6 +78,7 @@ fun RulesScreen(
                 items(rules, key = { it.rule.id }) { item ->
                     RuleCard(
                         rule = item.rule,
+                        otpTypeName = item.otpType.name,
                         recipientNames = item.recipients.map { it.name },
                         onToggle = { viewModel.setEnabled(item.rule, it) },
                         onClick = { onEditRule(item.rule.id) }
@@ -91,6 +92,7 @@ fun RulesScreen(
 @Composable
 private fun RuleCard(
     rule: ForwardingRule,
+    otpTypeName: String,
     recipientNames: List<String>,
     onToggle: (Boolean) -> Unit,
     onClick: () -> Unit
@@ -112,7 +114,7 @@ private fun RuleCard(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "${rule.otpType.name} → ${recipientNames.ifEmpty { listOf("—") }.joinToString(", ")}",
+                text = "$otpTypeName → ${recipientNames.ifEmpty { listOf("—") }.joinToString(", ")}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

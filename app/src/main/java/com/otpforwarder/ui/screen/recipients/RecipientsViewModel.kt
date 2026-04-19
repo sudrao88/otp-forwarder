@@ -3,6 +3,7 @@ package com.otpforwarder.ui.screen.recipients
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.otpforwarder.domain.model.Recipient
+import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.repository.ForwardingRuleRepository
 import com.otpforwarder.domain.repository.RecipientRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -16,17 +17,20 @@ import javax.inject.Inject
 @HiltViewModel
 class RecipientsViewModel @Inject constructor(
     private val recipientRepository: RecipientRepository,
-    private val ruleRepository: ForwardingRuleRepository
+    ruleRepository: ForwardingRuleRepository
 ) : ViewModel() {
 
     val recipients: StateFlow<List<RecipientWithRulesUi>> = combine(
         recipientRepository.getAllRecipients(),
-        ruleRepository.getAllRulesWithRecipients()
-    ) { recips, rulesWithRecs ->
+        ruleRepository.getAllRulesWithDetails()
+    ) { recips, rules ->
         recips.map { recipient ->
-            val ruleNames = rulesWithRecs
-                .filter { (_, rs) -> rs.any { it.id == recipient.id } }
-                .map { (r, _) -> r.name }
+            val ruleNames = rules.filter { rule ->
+                rule.actions.any { action ->
+                    (action is RuleAction.ForwardSms && recipient.id in action.recipientIds) ||
+                        (action is RuleAction.PlaceCall && action.recipientId == recipient.id)
+                }
+            }.map { it.name }
             RecipientWithRulesUi(recipient, ruleNames)
         }
     }.stateIn(

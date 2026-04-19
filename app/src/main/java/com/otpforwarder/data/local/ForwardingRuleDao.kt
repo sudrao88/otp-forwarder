@@ -14,7 +14,7 @@ interface ForwardingRuleDao {
 
     @Transaction
     @Query("SELECT * FROM forwarding_rules ORDER BY priority ASC")
-    fun getAllRulesWithRecipients(): Flow<List<RuleWithRecipients>>
+    fun getAllRulesWithDetails(): Flow<List<RuleWithDetails>>
 
     @Query("SELECT * FROM forwarding_rules ORDER BY priority ASC")
     fun getAllRules(): Flow<List<ForwardingRuleEntity>>
@@ -24,20 +24,11 @@ interface ForwardingRuleDao {
 
     @Transaction
     @Query("SELECT * FROM forwarding_rules WHERE id = :id")
-    suspend fun getRuleWithRecipientsById(id: Long): RuleWithRecipients?
+    suspend fun getRuleWithDetailsById(id: Long): RuleWithDetails?
 
     @Transaction
-    @Query("""
-        SELECT r.* FROM forwarding_rules r
-        INNER JOIN rule_recipient_cross_ref xref ON r.id = xref.ruleId
-        INNER JOIN recipients rec ON xref.recipientId = rec.id
-        WHERE r.isEnabled = 1
-          AND rec.isActive = 1
-          AND (r.otpType = 'ALL' OR r.otpType = :otpType)
-        GROUP BY r.id
-        ORDER BY CASE WHEN r.otpType = 'ALL' THEN 1 ELSE 0 END, r.priority ASC
-    """)
-    suspend fun getMatchingRulesWithRecipients(otpType: String): List<RuleWithRecipients>
+    @Query("SELECT * FROM forwarding_rules WHERE isEnabled = 1 ORDER BY priority ASC")
+    suspend fun getEnabledRulesWithDetails(): List<RuleWithDetails>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRule(rule: ForwardingRuleEntity): Long
@@ -49,11 +40,31 @@ interface ForwardingRuleDao {
     suspend fun deleteRule(rule: ForwardingRuleEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertRuleRecipientCrossRef(crossRef: RuleRecipientCrossRef)
+    suspend fun insertCondition(condition: RuleConditionEntity): Long
 
-    @Query("DELETE FROM rule_recipient_cross_ref WHERE ruleId = :ruleId")
-    suspend fun deleteRuleRecipientCrossRefs(ruleId: Long)
+    @Query("DELETE FROM rule_conditions WHERE ruleId = :ruleId")
+    suspend fun deleteConditionsForRule(ruleId: Long)
 
-    @Query("SELECT ruleId FROM rule_recipient_cross_ref WHERE recipientId = :recipientId")
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAction(action: RuleActionEntity): Long
+
+    @Query("DELETE FROM rule_actions WHERE ruleId = :ruleId")
+    suspend fun deleteActionsForRule(ruleId: Long)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertActionRecipientCrossRef(crossRef: ActionRecipientCrossRef)
+
+    @Query(
+        """
+        SELECT DISTINCT a.ruleId
+        FROM rule_actions a
+        WHERE a.callRecipientId = :recipientId
+        UNION
+        SELECT DISTINCT a.ruleId
+        FROM rule_actions a
+        INNER JOIN action_recipient_cross_ref x ON x.actionId = a.id
+        WHERE x.recipientId = :recipientId
+        """
+    )
     suspend fun getRuleIdsForRecipient(recipientId: Long): List<Long>
 }
