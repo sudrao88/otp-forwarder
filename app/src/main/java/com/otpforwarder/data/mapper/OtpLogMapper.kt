@@ -33,7 +33,7 @@ fun OtpLogEntity.toDomain(): OtpLogEntry = OtpLogEntry(
     confidence = confidence,
     classifierTier = ClassifierTier.valueOf(classifierTier),
     ruleName = ruleName,
-    recipientNames = recipientNames.split(SUMMARY_SEPARATOR).map { it.trim() },
+    recipientNames = if (recipientNames.isBlank()) emptyList() else recipientNames.split(SUMMARY_SEPARATOR),
     status = status,
     forwardedAt = Instant.ofEpochMilli(forwardedAt)
 )

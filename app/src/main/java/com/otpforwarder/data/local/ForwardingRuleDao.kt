@@ -16,12 +16,6 @@ interface ForwardingRuleDao {
     @Query("SELECT * FROM forwarding_rules ORDER BY priority ASC")
     fun getAllRulesWithDetails(): Flow<List<RuleWithDetails>>
 
-    @Query("SELECT * FROM forwarding_rules ORDER BY priority ASC")
-    fun getAllRules(): Flow<List<ForwardingRuleEntity>>
-
-    @Query("SELECT * FROM forwarding_rules WHERE id = :id")
-    suspend fun getRuleById(id: Long): ForwardingRuleEntity?
-
     @Transaction
     @Query("SELECT * FROM forwarding_rules WHERE id = :id")
     suspend fun getRuleWithDetailsById(id: Long): RuleWithDetails?

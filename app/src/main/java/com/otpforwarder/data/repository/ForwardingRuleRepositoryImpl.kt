@@ -5,7 +5,6 @@ import com.otpforwarder.data.local.ActionRecipientCrossRef
 import com.otpforwarder.data.local.AppDatabase
 import com.otpforwarder.data.local.ForwardingRuleDao
 import com.otpforwarder.data.mapper.toDomain
-import com.otpforwarder.data.mapper.toDomainShallow
 import com.otpforwarder.data.mapper.toEntity
 import com.otpforwarder.data.mapper.toRuleEntity
 import com.otpforwarder.domain.model.ForwardingRule
@@ -24,14 +23,6 @@ class ForwardingRuleRepositoryImpl @Inject constructor(
         forwardingRuleDao.getAllRulesWithDetails().map { list ->
             list.map { it.toDomain() }
         }
-
-    override fun getAllRules(): Flow<List<ForwardingRule>> =
-        forwardingRuleDao.getAllRules().map { entities ->
-            entities.map { it.toDomainShallow() }
-        }
-
-    override suspend fun getRuleById(id: Long): ForwardingRule? =
-        forwardingRuleDao.getRuleById(id)?.toDomainShallow()
 
     override suspend fun getRuleWithDetailsById(id: Long): ForwardingRule? =
         forwardingRuleDao.getRuleWithDetailsById(id)?.toDomain()

@@ -14,7 +14,7 @@ import androidx.room.TypeConverters
         OtpLogEntity::class
     ],
     version = 2,
-    exportSchema = false
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {

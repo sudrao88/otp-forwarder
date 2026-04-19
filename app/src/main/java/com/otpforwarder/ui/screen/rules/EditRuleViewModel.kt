@@ -224,7 +224,7 @@ class EditRuleViewModel @Inject constructor(
         )
         viewModelScope.launch {
             if (s.isEditing) {
-                val existing = ruleRepository.getRuleById(editingRuleId)
+                val existing = ruleRepository.getRuleWithDetailsById(editingRuleId)
                 ruleRepository.updateRule(rule.copy(isEnabled = existing?.isEnabled ?: true))
             } else {
                 ruleRepository.insertRule(rule)
@@ -236,7 +236,7 @@ class EditRuleViewModel @Inject constructor(
     fun delete(onDone: () -> Unit) {
         if (!_state.value.isEditing) return
         viewModelScope.launch {
-            val existing = ruleRepository.getRuleById(editingRuleId) ?: return@launch
+            val existing = ruleRepository.getRuleWithDetailsById(editingRuleId) ?: return@launch
             ruleRepository.deleteRule(existing)
             onDone()
         }

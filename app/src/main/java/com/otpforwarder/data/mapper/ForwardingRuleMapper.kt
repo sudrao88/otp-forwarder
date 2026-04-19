@@ -11,15 +11,6 @@ import com.otpforwarder.domain.model.OtpType
 import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.model.RuleCondition
 
-fun ForwardingRuleEntity.toDomainShallow(): ForwardingRule = ForwardingRule(
-    id = id,
-    name = name,
-    isEnabled = isEnabled,
-    priority = priority,
-    conditions = emptyList(),
-    actions = emptyList()
-)
-
 fun ForwardingRule.toRuleEntity(): ForwardingRuleEntity = ForwardingRuleEntity(
     id = id,
     name = name,
@@ -43,7 +34,7 @@ fun RuleConditionEntity.toDomain(): RuleCondition {
             pattern = pattern.orEmpty(),
             connector = conn
         )
-        else -> RuleCondition.OtpTypeIs(OtpType.ALL, conn)
+        else -> error("Unknown conditionType=$conditionType")
     }
 }
 
@@ -74,15 +65,14 @@ fun RuleCondition.toEntity(ruleId: Long, orderIndex: Int): RuleConditionEntity =
     )
 }
 
-fun ActionWithRecipients.toDomain(): RuleAction = when (action.actionType) {
+fun ActionWithRecipients.toDomain(): RuleAction? = when (action.actionType) {
     RuleActionEntity.TYPE_FORWARD_SMS -> RuleAction.ForwardSms(
         recipientIds = recipients.map { it.id }
     )
     RuleActionEntity.TYPE_RINGER_LOUD -> RuleAction.SetRingerLoud
-    RuleActionEntity.TYPE_PLACE_CALL -> RuleAction.PlaceCall(
-        recipientId = action.callRecipientId ?: 0L
-    )
-    else -> RuleAction.SetRingerLoud
+    // Drop orphaned PlaceCall rows (recipient deleted without cascade) so we don't silently call id=0.
+    RuleActionEntity.TYPE_PLACE_CALL -> action.callRecipientId?.let { RuleAction.PlaceCall(it) }
+    else -> error("Unknown actionType=${action.actionType}")
 }
 
 fun RuleAction.toEntity(ruleId: Long, orderIndex: Int): RuleActionEntity = when (this) {
@@ -116,5 +106,5 @@ fun RuleWithDetails.toDomain(): ForwardingRule = ForwardingRule(
         .map { it.toDomain() },
     actions = actions
         .sortedBy { it.action.orderIndex }
-        .map { it.toDomain() }
+        .mapNotNull { it.toDomain() }
 )

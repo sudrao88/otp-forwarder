@@ -54,9 +54,6 @@ class RuleEngineTest {
         private val rules: List<ForwardingRule>
     ) : ForwardingRuleRepository {
         override fun getAllRulesWithDetails(): Flow<List<ForwardingRule>> = flowOf(rules)
-        override fun getAllRules(): Flow<List<ForwardingRule>> = flowOf(rules)
-        override suspend fun getRuleById(id: Long): ForwardingRule? =
-            rules.firstOrNull { it.id == id }
         override suspend fun getRuleWithDetailsById(id: Long): ForwardingRule? =
             rules.firstOrNull { it.id == id }
         override suspend fun getEnabledRulesWithDetails(): List<ForwardingRule> =
