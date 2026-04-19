@@ -186,8 +186,12 @@ class EditRuleViewModel @Inject constructor(
         }
     }
 
+    fun requestDelete() = _state.update { it.copy(showDeleteConfirm = true) }
+    fun dismissDelete() = _state.update { it.copy(showDeleteConfirm = false) }
+
     fun save(onDone: () -> Unit) {
         val s = _state.value
+        if (s.inFlight) return
         var nameError: String? = null
         var generalError: String? = null
 
@@ -222,23 +226,34 @@ class EditRuleViewModel @Inject constructor(
             conditions = s.conditions.map(::toDomainCondition),
             actions = s.actions.map(::toDomainAction)
         )
+        _state.update { it.copy(inFlight = true) }
         viewModelScope.launch {
-            if (s.isEditing) {
-                val existing = ruleRepository.getRuleWithDetailsById(editingRuleId)
-                ruleRepository.updateRule(rule.copy(isEnabled = existing?.isEnabled ?: true))
-            } else {
-                ruleRepository.insertRule(rule)
+            try {
+                if (s.isEditing) {
+                    val existing = ruleRepository.getRuleWithDetailsById(editingRuleId)
+                    ruleRepository.updateRule(rule.copy(isEnabled = existing?.isEnabled ?: true))
+                } else {
+                    ruleRepository.insertRule(rule)
+                }
+                onDone()
+            } finally {
+                _state.update { it.copy(inFlight = false) }
             }
-            onDone()
         }
     }
 
     fun delete(onDone: () -> Unit) {
-        if (!_state.value.isEditing) return
+        val s = _state.value
+        if (!s.isEditing || s.inFlight) return
+        _state.update { it.copy(inFlight = true, showDeleteConfirm = false) }
         viewModelScope.launch {
-            val existing = ruleRepository.getRuleWithDetailsById(editingRuleId) ?: return@launch
-            ruleRepository.deleteRule(existing)
-            onDone()
+            try {
+                val existing = ruleRepository.getRuleWithDetailsById(editingRuleId) ?: return@launch
+                ruleRepository.deleteRule(existing)
+                onDone()
+            } finally {
+                _state.update { it.copy(inFlight = false) }
+            }
         }
     }
 
@@ -286,7 +301,9 @@ class EditRuleViewModel @Inject constructor(
         val allRecipients: List<Recipient> = emptyList(),
         val showLoudModePermissionHint: Boolean = false,
         val showCallPermissionHint: Boolean = false,
-        val generalError: String? = null
+        val generalError: String? = null,
+        val inFlight: Boolean = false,
+        val showDeleteConfirm: Boolean = false
     )
 }
 

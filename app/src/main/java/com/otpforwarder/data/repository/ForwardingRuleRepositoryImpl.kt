@@ -11,6 +11,7 @@ import com.otpforwarder.domain.model.ForwardingRule
 import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.repository.ForwardingRuleRepository
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 
@@ -54,6 +55,53 @@ class ForwardingRuleRepositoryImpl @Inject constructor(
 
     override suspend fun getRuleIdsForRecipient(recipientId: Long): List<Long> =
         forwardingRuleDao.getRuleIdsForRecipient(recipientId)
+
+    override suspend fun setRuleAssignmentsForRecipient(
+        recipientId: Long,
+        ruleIds: Set<Long>
+    ) {
+        database.withTransaction {
+            val allRules = forwardingRuleDao.getAllRulesWithDetails().first().map { it.toDomain() }
+            for (rule in allRules) {
+                val shouldHave = rule.id in ruleIds
+                val has = rule.actions.any { action ->
+                    action is RuleAction.ForwardSms && recipientId in action.recipientIds
+                }
+                if (shouldHave == has) continue
+                val newActions = mutateForwardActions(rule.actions, recipientId, shouldHave)
+                val updated = rule.copy(actions = newActions)
+                require(updated.actions.isNotEmpty()) {
+                    "Forwarding rule must declare at least one action"
+                }
+                forwardingRuleDao.updateRule(updated.toRuleEntity())
+                forwardingRuleDao.deleteConditionsForRule(updated.id)
+                forwardingRuleDao.deleteActionsForRule(updated.id)
+                writeConditionsAndActions(updated.id, updated)
+            }
+        }
+    }
+
+    private fun mutateForwardActions(
+        actions: List<RuleAction>,
+        recipientId: Long,
+        add: Boolean
+    ): List<RuleAction> {
+        if (!add) {
+            return actions.map { action ->
+                if (action is RuleAction.ForwardSms) {
+                    action.copy(recipientIds = action.recipientIds.filter { it != recipientId })
+                } else action
+            }
+        }
+        var inserted = false
+        val updated = actions.map { action ->
+            if (!inserted && action is RuleAction.ForwardSms) {
+                inserted = true
+                action.copy(recipientIds = (action.recipientIds + recipientId).distinct())
+            } else action
+        }
+        return if (inserted) updated else updated + RuleAction.ForwardSms(listOf(recipientId))
+    }
 
     private suspend fun writeConditionsAndActions(ruleId: Long, rule: ForwardingRule) {
         rule.conditions.forEachIndexed { index, condition ->

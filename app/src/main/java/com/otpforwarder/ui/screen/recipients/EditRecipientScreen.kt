@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,7 +55,10 @@ fun EditRecipientScreen(
                 },
                 actions = {
                     if (state.isEditing) {
-                        IconButton(onClick = { viewModel.delete(onBack) }) {
+                        IconButton(
+                            onClick = viewModel::requestDelete,
+                            enabled = !state.inFlight
+                        ) {
                             Icon(Icons.Default.Delete, contentDescription = "Delete recipient")
                         }
                     }
@@ -126,18 +130,38 @@ fun EditRecipientScreen(
             TextButton(
                 onClick = {
                     viewModel.save { id -> onAddNewRule(id) }
-                }
+                },
+                enabled = !state.inFlight
             ) {
                 Text("+ Add new rule")
             }
 
             Button(
                 onClick = { viewModel.save { onBack() } },
+                enabled = !state.inFlight,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Save Recipient")
             }
             Spacer(Modifier.height(16.dp))
         }
+    }
+
+    if (state.showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissDelete,
+            title = { Text("Delete recipient?") },
+            text = { Text("This will remove ${state.name.ifBlank { "this recipient" }}. Rules that forward to them will stay, but will no longer deliver to this number.") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.delete(onBack) }) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissDelete) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

@@ -8,12 +8,15 @@ import com.otpforwarder.domain.usecase.ProcessIncomingSmsUseCase
 import com.otpforwarder.domain.repository.OtpLogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Clock
 import java.time.Duration
@@ -29,12 +32,22 @@ class HomeViewModel @Inject constructor(
 
     private val tick = MutableStateFlow(0L)
 
+    /**
+     * Emits a fresh cutoff timestamp once per [CUTOFF_REFRESH_MS] so old logs
+     * age out even while the UI is open and `tick` hasn't changed (retry).
+     */
+    private val cutoffs = channelFlow {
+        while (true) {
+            send(clock.instant().minus(WINDOW).toEpochMilli())
+            delay(CUTOFF_REFRESH_MS)
+        }
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     val uiState: StateFlow<HomeUiState> = combine(
         settings.masterEnabled,
-        tick.flatMapLatest {
-            otpLogRepository.getRecentLogs(clock.instant().minus(WINDOW).toEpochMilli())
-        }
+        combine(tick, cutoffs) { _, cutoff -> cutoff }
+            .flatMapLatest { cutoff -> otpLogRepository.getRecentLogs(cutoff) }
     ) { enabled, logs ->
         HomeUiState(
             masterEnabled = enabled,
@@ -46,12 +59,6 @@ class HomeViewModel @Inject constructor(
         initialValue = HomeUiState()
     )
 
-    init {
-        viewModelScope.launch {
-            otpLogRepository.pruneOldLogs(clock.instant().minus(WINDOW).toEpochMilli())
-        }
-    }
-
     fun setMasterEnabled(enabled: Boolean) {
         settings.setMasterEnabled(enabled)
     }
@@ -62,7 +69,7 @@ class HomeViewModel @Inject constructor(
             // original failed log stays in place; a new log entry reflects the
             // retry outcome. The "tick" refresh keeps the list in sync.
             runCatching { processIncomingSms(entry.sender, entry.originalMessage) }
-            tick.value = tick.value + 1
+            tick.update { it + 1 }
         }
     }
 
@@ -73,6 +80,7 @@ class HomeViewModel @Inject constructor(
 
     companion object {
         private val WINDOW: Duration = Duration.ofHours(12)
+        private const val CUTOFF_REFRESH_MS = 60_000L
         private const val STATE_IN_TIMEOUT_MS = 5_000L
     }
 }

@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import com.otpforwarder.domain.model.ForwardingRule
 import com.otpforwarder.domain.model.OtpType
 import com.otpforwarder.domain.model.Recipient
-import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.model.RuleCondition
 import com.otpforwarder.domain.repository.ForwardingRuleRepository
 import com.otpforwarder.domain.repository.RecipientRepository
@@ -67,8 +66,12 @@ class EditRecipientViewModel @Inject constructor(
         )
     }
 
+    fun requestDelete() = _state.update { it.copy(showDeleteConfirm = true) }
+    fun dismissDelete() = _state.update { it.copy(showDeleteConfirm = false) }
+
     fun save(onDone: (Long) -> Unit) {
         val s = _state.value
+        if (s.inFlight) return
         if (s.name.isBlank()) {
             _state.update { it.copy(nameError = "Name is required") }
             return
@@ -77,78 +80,49 @@ class EditRecipientViewModel @Inject constructor(
             _state.update { it.copy(phoneError = "Phone number is required") }
             return
         }
+        _state.update { it.copy(inFlight = true) }
         viewModelScope.launch {
-            val id = if (s.isEditing) {
-                recipientRepository.updateRecipient(
-                    Recipient(
-                        id = editingId,
-                        name = s.name.trim(),
-                        phoneNumber = s.phoneNumber.trim(),
-                        isActive = s.isActive
+            try {
+                val id = if (s.isEditing) {
+                    recipientRepository.updateRecipient(
+                        Recipient(
+                            id = editingId,
+                            name = s.name.trim(),
+                            phoneNumber = s.phoneNumber.trim(),
+                            isActive = s.isActive
+                        )
                     )
-                )
-                editingId
-            } else {
-                recipientRepository.insertRecipient(
-                    Recipient(
-                        name = s.name.trim(),
-                        phoneNumber = s.phoneNumber.trim(),
-                        isActive = true
+                    editingId
+                } else {
+                    recipientRepository.insertRecipient(
+                        Recipient(
+                            name = s.name.trim(),
+                            phoneNumber = s.phoneNumber.trim(),
+                            isActive = true
+                        )
                     )
-                )
+                }
+                ruleRepository.setRuleAssignmentsForRecipient(id, s.selectedRuleIds)
+                onDone(id)
+            } finally {
+                _state.update { it.copy(inFlight = false) }
             }
-            syncRuleAssignments(id, s.selectedRuleIds)
-            onDone(id)
         }
     }
 
     fun delete(onDone: () -> Unit) {
-        if (!_state.value.isEditing) return
+        val s = _state.value
+        if (!s.isEditing || s.inFlight) return
+        _state.update { it.copy(inFlight = true, showDeleteConfirm = false) }
         viewModelScope.launch {
-            val existing = recipientRepository.getRecipientById(editingId) ?: return@launch
-            recipientRepository.deleteRecipient(existing)
-            onDone()
-        }
-    }
-
-    /**
-     * For each rule, ensure this recipient appears (or doesn't) in the rule's
-     * forward-SMS targets. If the rule has no `ForwardSms` action yet, one is
-     * added containing only this recipient.
-     */
-    private suspend fun syncRuleAssignments(recipientId: Long, selectedRuleIds: Set<Long>) {
-        val allRules = ruleRepository.getAllRulesWithDetails().firstOrNull().orEmpty()
-        for (rule in allRules) {
-            val shouldHave = rule.id in selectedRuleIds
-            val has = rule.actions.any { action ->
-                action is RuleAction.ForwardSms && recipientId in action.recipientIds
-            }
-            if (shouldHave == has) continue
-            val newActions = mutateForwardActions(rule.actions, recipientId, shouldHave)
-            ruleRepository.updateRule(rule.copy(actions = newActions))
-        }
-    }
-
-    private fun mutateForwardActions(
-        actions: List<RuleAction>,
-        recipientId: Long,
-        add: Boolean
-    ): List<RuleAction> {
-        if (!add) {
-            return actions.map { action ->
-                if (action is RuleAction.ForwardSms) {
-                    action.copy(recipientIds = action.recipientIds.filter { it != recipientId })
-                } else action
+            try {
+                val existing = recipientRepository.getRecipientById(editingId) ?: return@launch
+                recipientRepository.deleteRecipient(existing)
+                onDone()
+            } finally {
+                _state.update { it.copy(inFlight = false) }
             }
         }
-        var inserted = false
-        val updated = actions.map { action ->
-            if (!inserted && action is RuleAction.ForwardSms) {
-                inserted = true
-                action.copy(recipientIds = (action.recipientIds + recipientId).distinct())
-            } else action
-        }
-        return if (inserted) updated else updated + RuleAction.ForwardSms(listOf(recipientId))
     }
 
     private fun ForwardingRule.toSummary(): RuleSummary {
@@ -172,6 +146,8 @@ class EditRecipientViewModel @Inject constructor(
         val phoneError: String? = null,
         val isActive: Boolean = true,
         val allRules: List<RuleSummary> = emptyList(),
-        val selectedRuleIds: Set<Long> = emptySet()
+        val selectedRuleIds: Set<Long> = emptySet(),
+        val inFlight: Boolean = false,
+        val showDeleteConfirm: Boolean = false
     )
 }

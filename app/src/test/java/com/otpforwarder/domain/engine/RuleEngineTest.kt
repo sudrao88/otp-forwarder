@@ -62,6 +62,7 @@ class RuleEngineTest {
         override suspend fun updateRule(rule: ForwardingRule) = Unit
         override suspend fun deleteRule(rule: ForwardingRule) = Unit
         override suspend fun getRuleIdsForRecipient(recipientId: Long): List<Long> = emptyList()
+        override suspend fun setRuleAssignmentsForRecipient(recipientId: Long, ruleIds: Set<Long>) = Unit
     }
 
     private fun evaluate(

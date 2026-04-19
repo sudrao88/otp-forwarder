@@ -45,8 +45,14 @@ class ProcessIncomingSmsUseCase @Inject constructor(
         val recipientsById = recipientRepository.getActiveRecipients().associateBy { it.id }
         val now = Instant.now(clock)
         val alreadySentTo = mutableSetOf<Long>()
+        val forwardedRecipients = linkedSetOf<String>()
         for (rule in matchingRules) {
             val outcomes = executeRuleActions(otp, rule.actions, recipientsById, alreadySentTo)
+            outcomes.forEach { outcome ->
+                if (outcome.status == ExecuteRuleActionsUseCase.ActionOutcome.Status.SUCCESS) {
+                    forwardedRecipients += outcome.forwardedRecipientNames
+                }
+            }
             val anySuccess = outcomes.any { it.status == ExecuteRuleActionsUseCase.ActionOutcome.Status.SUCCESS }
             val anyFailed = outcomes.any { it.status == ExecuteRuleActionsUseCase.ActionOutcome.Status.FAILED }
             val status = when {
@@ -73,7 +79,7 @@ class ProcessIncomingSmsUseCase @Inject constructor(
                 )
             )
         }
-        return Result.Forwarded(otp, matchingRules.size)
+        return Result.Forwarded(otp, matchingRules.size, forwardedRecipients.toList())
     }
 
     sealed interface Result {
@@ -83,8 +89,16 @@ class ProcessIncomingSmsUseCase @Inject constructor(
         /** OTP detected but no forwarding rule matched. */
         data class NoMatchingRule(val otp: Otp) : Result
 
-        /** OTP detected and forwarded for [ruleCount] rule(s). */
-        data class Forwarded(val otp: Otp, val ruleCount: Int) : Result
+        /**
+         * OTP detected and at least one rule matched. [recipients] lists the
+         * recipient names that actually received the SMS (empty if every
+         * matching rule fired only non-forward actions, e.g. ring loud / call).
+         */
+        data class Forwarded(
+            val otp: Otp,
+            val ruleCount: Int,
+            val recipients: List<String>
+        ) : Result
     }
 
     companion object {

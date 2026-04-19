@@ -8,52 +8,61 @@ import android.provider.Telephony
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.otpforwarder.service.OtpProcessingService
+import com.otpforwarder.worker.RetryWorker
 
 /**
  * Entry point for the pipeline. Receives `SMS_RECEIVED` broadcasts, reassembles
  * multi-part messages per sender, and hands each reconstructed message off to
- * [OtpProcessingService].
+ * [OtpProcessingService]. If the foreground-service start is blocked (Android
+ * 12+ background start restrictions), we fall back to [RetryWorker] so the SMS
+ * is still processed instead of lost.
  *
- * We use [goAsync] to give ourselves a bit more headroom than the usual 10s
- * [onReceive] window, but all we actually do here is parse PDUs and start the
- * service — the heavy lifting happens in the service. Any parsing or service
- * startup failure is swallowed to a log entry; a crashing receiver would
- * otherwise show as an ANR to the user for every incoming SMS.
+ * All work here is synchronous PDU parsing + startForegroundService, so the
+ * standard 10s onReceive window is plenty — no goAsync required. Any unhandled
+ * throw inside a BroadcastReceiver would otherwise surface to the user as a
+ * crash dialog for every incoming SMS.
  */
 class SmsReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
-
-        val pending = goAsync()
         try {
             dispatch(context, intent)
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to process incoming SMS broadcast", t)
-        } finally {
-            pending.finish()
         }
     }
 
     private fun dispatch(context: Context, intent: Intent) {
-        val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
+        val messages = try {
+            Telephony.Sms.Intents.getMessagesFromIntent(intent)
+        } catch (t: Throwable) {
+            Log.w(TAG, "PDU parse failed", t)
+            null
+        } ?: return
         if (messages.isEmpty()) return
 
-        // Multi-part SMS arrive as multiple SmsMessage PDUs with the same
-        // originating address; concatenate the bodies in arrival order.
-        val assembled = linkedMapOf<String, StringBuilder>()
-        for (sms in messages) {
-            val sender = sms.displayOriginatingAddress ?: sms.originatingAddress ?: continue
-            val body = sms.displayMessageBody ?: sms.messageBody ?: continue
-            assembled.getOrPut(sender) { StringBuilder() }.append(body)
+        val parts = messages.mapNotNull { sms ->
+            val sender = sms.displayOriginatingAddress ?: sms.originatingAddress ?: return@mapNotNull null
+            val body = sms.displayMessageBody ?: sms.messageBody ?: return@mapNotNull null
+            sender to body
         }
+        for ((sender, body) in assembleMultipart(parts)) {
+            deliver(context, sender, body)
+        }
+    }
 
-        for ((sender, bodyBuilder) in assembled) {
-            val body = bodyBuilder.toString()
-            if (body.isBlank()) continue
-            val serviceIntent = OtpProcessingService.intent(context, sender, body)
-            runCatching { startProcessingService(context, serviceIntent) }
-                .onFailure { Log.e(TAG, "Unable to start processing service", it) }
+    private fun deliver(context: Context, sender: String, body: String) {
+        val serviceIntent = OtpProcessingService.intent(context, sender, body)
+        try {
+            startProcessingService(context, serviceIntent)
+        } catch (t: Throwable) {
+            // ForegroundServiceStartNotAllowedException (API 31+) or
+            // IllegalStateException when the app is backgrounded by the system:
+            // fall back to WorkManager so the SMS isn't lost.
+            Log.w(TAG, "Foreground service start blocked, falling back to RetryWorker", t)
+            runCatching { RetryWorker.enqueue(context, sender, body) }
+                .onFailure { Log.e(TAG, "RetryWorker enqueue failed", it) }
         }
     }
 
@@ -67,5 +76,23 @@ class SmsReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "SmsReceiver"
+
+        /**
+         * Multi-part SMS arrive as multiple PDUs with the same originating
+         * address; concatenate bodies per sender in arrival order. Empty bodies
+         * are dropped after concatenation.
+         */
+        internal fun assembleMultipart(
+            parts: List<Pair<String, String>>
+        ): List<Pair<String, String>> {
+            val assembled = linkedMapOf<String, StringBuilder>()
+            for ((sender, body) in parts) {
+                assembled.getOrPut(sender) { StringBuilder() }.append(body)
+            }
+            return assembled.mapNotNull { (sender, builder) ->
+                val body = builder.toString()
+                if (body.isBlank()) null else sender to body
+            }
+        }
     }
 }

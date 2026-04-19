@@ -1,6 +1,7 @@
 package com.otpforwarder.worker
 
 import android.content.Context
+import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
@@ -41,13 +42,18 @@ class RetryWorker @AssistedInject constructor(
                 ProcessIncomingSmsUseCase.Result.NotOtp -> Result.success()
             }
         } catch (t: Throwable) {
-            if (runAttemptCount + 1 >= MAX_ATTEMPTS) Result.failure() else Result.retry()
+            Log.e(TAG, "Retry attempt ${runAttemptCount + 1} failed", t)
+            // runAttemptCount is 0-indexed (0 on the first run). Check whether
+            // this run was the last permitted attempt.
+            val isLastAttempt = runAttemptCount + 1 >= MAX_ATTEMPTS
+            if (isLastAttempt) Result.failure() else Result.retry()
         }
     }
 
     companion object {
-        private const val KEY_SENDER = "sender"
-        private const val KEY_BODY = "body"
+        private const val TAG = "RetryWorker"
+        const val KEY_SENDER = "sender"
+        const val KEY_BODY = "body"
         private const val INITIAL_BACKOFF_SECONDS = 10L
         private const val MAX_ATTEMPTS = 5
 

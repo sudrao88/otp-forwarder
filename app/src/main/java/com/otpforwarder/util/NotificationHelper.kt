@@ -50,12 +50,24 @@ class NotificationHelper @Inject constructor(
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
 
-    /** Notifies the user that an OTP was successfully forwarded. */
-    fun notifyForwarded(otp: Otp, recipientNames: List<String>) {
+    /**
+     * Notifies the user that an OTP was processed.
+     *
+     * [recipientNames] is the list of recipients that actually received the
+     * forwarded SMS. If it is empty (every matching rule fired only non-forward
+     * actions, e.g. ring loud / call), the notification falls back to the rule
+     * count so the text still reflects what happened.
+     */
+    fun notifyForwarded(otp: Otp, recipientNames: List<String>, ruleCount: Int) {
+        val target = if (recipientNames.isNotEmpty()) {
+            recipientNames.joinToString(", ")
+        } else {
+            "$ruleCount rule(s)"
+        }
         val text = buildString {
             append(otp.type.name).append(" · ")
             append(otp.code).append(" → ")
-            append(recipientNames.joinToString(", "))
+            append(target)
         }
         notify(
             id = otp.notificationId(),
@@ -80,12 +92,18 @@ class NotificationHelper @Inject constructor(
         )
     }
 
-    /** Notifies the user that forwarding is being retried in the background. */
-    fun notifyRetrying(sender: String, code: String) {
+    /**
+     * Notifies the user that forwarding is being retried in the background.
+     *
+     * The notification id incorporates a hash of the message body so two
+     * concurrent retries from the same sender (different SMS) do not collide
+     * on a single notification slot.
+     */
+    fun notifyRetrying(sender: String, body: String) {
         notify(
-            id = (sender + code).hashCode(),
+            id = (sender + body.hashCode()).hashCode(),
             title = context.getString(R.string.notification_retrying_title),
-            text = "$sender · $code",
+            text = sender,
             smallIcon = android.R.drawable.stat_notify_sync
         )
     }

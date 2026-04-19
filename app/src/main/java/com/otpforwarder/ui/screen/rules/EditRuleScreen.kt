@@ -19,6 +19,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -80,7 +81,10 @@ fun EditRuleScreen(
                 },
                 actions = {
                     if (state.isEditing) {
-                        IconButton(onClick = { viewModel.delete(onBack) }) {
+                        IconButton(
+                            onClick = viewModel::requestDelete,
+                            enabled = !state.inFlight
+                        ) {
                             Icon(Icons.Default.Delete, contentDescription = "Delete rule")
                         }
                     }
@@ -150,12 +154,31 @@ fun EditRuleScreen(
 
             Button(
                 onClick = { viewModel.save(onBack) },
+                enabled = !state.inFlight,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Save Rule")
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (state.showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissDelete,
+            title = { Text("Delete rule?") },
+            text = { Text("This will remove the rule \"${state.name.ifBlank { "Untitled" }}\". Incoming OTPs matching it will stop forwarding.") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.delete(onBack) }) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissDelete) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     addRecipientTargetAction?.let { actionIndex ->

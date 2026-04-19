@@ -7,6 +7,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.ServiceCompat
+import android.util.Log
 import com.otpforwarder.data.settings.SettingsRepository
 import com.otpforwarder.domain.usecase.ProcessIncomingSmsUseCase
 import com.otpforwarder.util.NotificationHelper
@@ -14,7 +15,6 @@ import com.otpforwarder.worker.RetryWorker
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicInteger
@@ -69,14 +69,16 @@ class OtpProcessingService : Service() {
                     is ProcessIncomingSmsUseCase.Result.Forwarded -> {
                         notificationHelper.notifyForwarded(
                             otp = result.otp,
-                            recipientNames = listOf("${result.ruleCount} rule(s)")
+                            recipientNames = result.recipients,
+                            ruleCount = result.ruleCount
                         )
                     }
                     is ProcessIncomingSmsUseCase.Result.NoMatchingRule,
                     ProcessIncomingSmsUseCase.Result.NotOtp -> Unit
                 }
             } catch (t: Throwable) {
-                notificationHelper.notifyRetrying(sender, "pending")
+                Log.e(TAG, "Pipeline failed; scheduling retry", t)
+                notificationHelper.notifyRetrying(sender, body)
                 RetryWorker.enqueue(applicationContext, sender, body)
             } finally {
                 if (inFlight.decrementAndGet() == 0) {
@@ -118,6 +120,7 @@ class OtpProcessingService : Service() {
     }
 
     companion object {
+        private const val TAG = "OtpProcessingService"
         const val EXTRA_SENDER = "extra_sender"
         const val EXTRA_BODY = "extra_body"
 

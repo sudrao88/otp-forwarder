@@ -49,6 +49,7 @@ class ExecuteRuleActionsUseCase @Inject constructor(
         val r = forwardSms(otp, action, recipientsById, alreadySentTo)
         val attempted = r.sent + r.skipped
         val everyone = attempted + r.failed
+        val sentNames = r.sent.map { it.name }
         return when {
             everyone.isEmpty() ->
                 ActionOutcome(action, ActionOutcome.Status.SKIPPED, "Forward skipped (no recipients)")
@@ -72,7 +73,7 @@ class ExecuteRuleActionsUseCase @Inject constructor(
                     if (r.failed.isNotEmpty()) append(" (failed: ").append(names(r.failed)).append(")")
                 }
                 val status = if (r.failed.isEmpty()) ActionOutcome.Status.SUCCESS else ActionOutcome.Status.FAILED
-                ActionOutcome(action, status, summary)
+                ActionOutcome(action, status, summary, forwardedRecipientNames = sentNames)
             }
         }
     }
@@ -110,7 +111,8 @@ class ExecuteRuleActionsUseCase @Inject constructor(
     data class ActionOutcome(
         val action: RuleAction,
         val status: Status,
-        val summary: String
+        val summary: String,
+        val forwardedRecipientNames: List<String> = emptyList()
     ) {
         val success: Boolean get() = status == Status.SUCCESS
 
