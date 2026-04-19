@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -78,8 +79,7 @@ fun RulesScreen(
                 items(rules, key = { it.rule.id }) { item ->
                     RuleCard(
                         rule = item.rule,
-                        otpTypeName = item.otpType.name,
-                        recipientNames = item.recipients.map { it.name },
+                        summary = item.summary,
                         onToggle = { viewModel.setEnabled(item.rule, it) },
                         onClick = { onEditRule(item.rule.id) }
                     )
@@ -92,8 +92,7 @@ fun RulesScreen(
 @Composable
 private fun RuleCard(
     rule: ForwardingRule,
-    otpTypeName: String,
-    recipientNames: List<String>,
+    summary: String,
     onToggle: (Boolean) -> Unit,
     onClick: () -> Unit
 ) {
@@ -114,9 +113,11 @@ private fun RuleCard(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "$otpTypeName → ${recipientNames.ifEmpty { listOf("—") }.joinToString(", ")}",
+                text = summary,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = "Priority: ${rule.priority}",

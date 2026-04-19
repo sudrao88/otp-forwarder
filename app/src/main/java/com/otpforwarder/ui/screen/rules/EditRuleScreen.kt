@@ -1,6 +1,10 @@
 package com.otpforwarder.ui.screen.rules
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,11 +13,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -22,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -38,10 +50,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.otpforwarder.domain.model.Connector
 import com.otpforwarder.domain.model.OtpType
+import com.otpforwarder.domain.model.Recipient
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,7 +63,11 @@ fun EditRuleScreen(
     viewModel: EditRuleViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var showAddRecipientSheet by remember { mutableStateOf(false) }
+    var addRecipientTargetAction by remember { mutableStateOf<Int?>(null) }
+
+    val callPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ -> viewModel.refreshPermissionHints() }
 
     Scaffold(
         topBar = {
@@ -90,75 +107,46 @@ fun EditRuleScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            OtpTypeDropdown(selected = state.otpType, onSelected = viewModel::setOtpType)
-
-            Text(
-                text = "Recipients",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
+            ConditionsSection(
+                conditions = state.conditions,
+                onAdd = viewModel::addCondition,
+                onRemove = viewModel::removeCondition,
+                onToggleConnector = viewModel::toggleConnector,
+                onOtpTypeChange = viewModel::setConditionOtpType,
+                onPatternChange = viewModel::setConditionPattern
             )
-            if (state.allRecipients.isEmpty()) {
-                Text(
-                    text = "No recipients yet. Add one below.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            state.allRecipients.forEach { recipient ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Checkbox(
-                        checked = recipient.id in state.selectedRecipientIds,
-                        onCheckedChange = { viewModel.toggleRecipient(recipient.id) }
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(recipient.name, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            recipient.phoneNumber,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-            TextButton(onClick = { showAddRecipientSheet = true }) {
-                Text("+ Add new recipient")
-            }
+
+            ActionsSection(
+                actions = state.actions,
+                allRecipients = state.allRecipients,
+                showLoudModePermissionHint = state.showLoudModePermissionHint,
+                showCallPermissionHint = state.showCallPermissionHint,
+                onAdd = viewModel::addAction,
+                onRemove = viewModel::removeAction,
+                onToggleRecipient = viewModel::toggleActionRecipient,
+                onCallRecipientChange = viewModel::setCallRecipient,
+                onAddInlineRecipient = { addRecipientTargetAction = it },
+                onGrantLoudMode = viewModel::openNotificationPolicySettings,
+                onGrantCallPhone = { callPermissionLauncher.launch(Manifest.permission.CALL_PHONE) }
+            )
 
             OutlinedTextField(
                 value = state.priority,
                 onValueChange = viewModel::setPriority,
                 label = { Text("Priority") },
+                supportingText = { Text("Lower numbers run first when multiple rules match.") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Text(
-                text = "Filters (optional)",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-            OutlinedTextField(
-                value = state.senderFilter,
-                onValueChange = viewModel::setSenderFilter,
-                label = { Text("Sender regex") },
-                isError = state.senderFilterError != null,
-                supportingText = { state.senderFilterError?.let { Text(it) } },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedTextField(
-                value = state.bodyFilter,
-                onValueChange = viewModel::setBodyFilter,
-                label = { Text("Body regex") },
-                isError = state.bodyFilterError != null,
-                supportingText = { state.bodyFilterError?.let { Text(it) } },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            state.generalError?.let { msg ->
+                Text(
+                    text = msg,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
 
             Button(
                 onClick = { viewModel.save(onBack) },
@@ -166,38 +154,143 @@ fun EditRuleScreen(
             ) {
                 Text("Save Rule")
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(24.dp))
         }
     }
 
-    if (showAddRecipientSheet) {
+    addRecipientTargetAction?.let { actionIndex ->
         InlineAddRecipientSheet(
-            onDismiss = { showAddRecipientSheet = false },
+            onDismiss = { addRecipientTargetAction = null },
             onAdd = { name, phone ->
-                viewModel.addInlineRecipient(name, phone) {
-                    showAddRecipientSheet = false
+                viewModel.addInlineRecipient(name, phone) { newId ->
+                    when (val a = state.actions.getOrNull(actionIndex)) {
+                        is ActionUi.ForwardSms -> viewModel.toggleActionRecipient(actionIndex, newId)
+                        is ActionUi.PlaceCall -> viewModel.setCallRecipient(actionIndex, newId)
+                        else -> Unit
+                    }
+                    addRecipientTargetAction = null
                 }
             }
         )
     }
 }
 
+@Composable
+private fun ConditionsSection(
+    conditions: List<ConditionUi>,
+    onAdd: (ConditionKind) -> Unit,
+    onRemove: (Int) -> Unit,
+    onToggleConnector: (Int) -> Unit,
+    onOtpTypeChange: (Int, OtpType) -> Unit,
+    onPatternChange: (Int, String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "If the message…",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = "The message must match these conditions. Tap AND / OR between them to change how they combine.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        conditions.forEachIndexed { index, condition ->
+            if (index > 0) {
+                ConnectorButton(
+                    connector = condition.connector,
+                    onClick = { onToggleConnector(index) }
+                )
+            }
+            ConditionRow(
+                condition = condition,
+                onRemove = { onRemove(index) },
+                onOtpTypeChange = { onOtpTypeChange(index, it) },
+                onPatternChange = { onPatternChange(index, it) }
+            )
+        }
+
+        AddConditionButton(onAdd = onAdd)
+    }
+}
+
+@Composable
+private fun ConnectorButton(connector: Connector, onClick: () -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+        AssistChip(
+            onClick = onClick,
+            label = { Text(connector.name) },
+            trailingIcon = {
+                Icon(
+                    Icons.Default.ArrowDropDown,
+                    contentDescription = "Toggle connector"
+                )
+            }
+        )
+    }
+}
+
+@Composable
+private fun ConditionRow(
+    condition: ConditionUi,
+    onRemove: () -> Unit,
+    onOtpTypeChange: (OtpType) -> Unit,
+    onPatternChange: (String) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                when (condition) {
+                    is ConditionUi.OtpTypeIs -> OtpTypeConditionBody(
+                        type = condition.type,
+                        onChange = onOtpTypeChange
+                    )
+                    is ConditionUi.SenderMatches -> PatternConditionBody(
+                        prefix = "is from",
+                        pattern = condition.pattern,
+                        placeholder = "e.g. HDFCBK",
+                        helper = "Matches the SMS sender. Supports regex.",
+                        error = condition.error,
+                        onChange = onPatternChange
+                    )
+                    is ConditionUi.BodyContains -> PatternConditionBody(
+                        prefix = "has",
+                        pattern = condition.pattern,
+                        placeholder = "e.g. credited",
+                        helper = "Matches text anywhere in the SMS. Supports regex.",
+                        suffix = "in the body",
+                        error = condition.error,
+                        onChange = onPatternChange
+                    )
+                }
+            }
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Default.Close, contentDescription = "Remove condition")
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun OtpTypeDropdown(
-    selected: OtpType,
-    onSelected: (OtpType) -> Unit
-) {
+private fun OtpTypeConditionBody(type: OtpType, onChange: (OtpType) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it }
-    ) {
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         OutlinedTextField(
-            value = selected.name,
+            value = otpTypeLabel(type),
             onValueChange = {},
             readOnly = true,
-            label = { Text("OTP Type") },
+            singleLine = true,
+            label = { Text("OTP type") },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .fillMaxWidth()
@@ -207,15 +300,358 @@ private fun OtpTypeDropdown(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
-            OtpType.entries.forEach { type ->
+            visibleOtpTypes.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(type.name) },
+                    text = { Text(otpTypeLabel(option)) },
                     onClick = {
-                        onSelected(type)
+                        onChange(option)
                         expanded = false
                     }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun PatternConditionBody(
+    prefix: String,
+    pattern: String,
+    placeholder: String,
+    helper: String,
+    error: String?,
+    onChange: (String) -> Unit,
+    suffix: String? = null
+) {
+    Column {
+        Text(
+            text = prefix,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
+        OutlinedTextField(
+            value = pattern,
+            onValueChange = onChange,
+            singleLine = true,
+            placeholder = { Text(placeholder) },
+            isError = error != null,
+            supportingText = { Text(error ?: helper) },
+            modifier = Modifier.fillMaxWidth()
+        )
+        suffix?.let {
+            Text(it, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun AddConditionButton(onAdd: (ConditionKind) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text("+ Add condition")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("OTP type…") },
+                onClick = {
+                    onAdd(ConditionKind.OTP_TYPE)
+                    expanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Sender matches…") },
+                onClick = {
+                    onAdd(ConditionKind.SENDER)
+                    expanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Body contains…") },
+                onClick = {
+                    onAdd(ConditionKind.BODY)
+                    expanded = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ActionsSection(
+    actions: List<ActionUi>,
+    allRecipients: List<Recipient>,
+    showLoudModePermissionHint: Boolean,
+    showCallPermissionHint: Boolean,
+    onAdd: (ActionKind) -> Unit,
+    onRemove: (Int) -> Unit,
+    onToggleRecipient: (Int, Long) -> Unit,
+    onCallRecipientChange: (Int, Long) -> Unit,
+    onAddInlineRecipient: (Int) -> Unit,
+    onGrantLoudMode: () -> Unit,
+    onGrantCallPhone: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "Then…",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+        actions.forEachIndexed { index, action ->
+            ActionRow(
+                index = index,
+                action = action,
+                allRecipients = allRecipients,
+                showLoudModePermissionHint = showLoudModePermissionHint,
+                showCallPermissionHint = showCallPermissionHint,
+                onRemove = { onRemove(index) },
+                onToggleRecipient = { onToggleRecipient(index, it) },
+                onCallRecipientChange = { onCallRecipientChange(index, it) },
+                onAddInlineRecipient = { onAddInlineRecipient(index) },
+                onGrantLoudMode = onGrantLoudMode,
+                onGrantCallPhone = onGrantCallPhone
+            )
+        }
+        AddActionButton(onAdd = onAdd)
+    }
+}
+
+@Composable
+private fun ActionRow(
+    index: Int,
+    action: ActionUi,
+    allRecipients: List<Recipient>,
+    showLoudModePermissionHint: Boolean,
+    showCallPermissionHint: Boolean,
+    onRemove: () -> Unit,
+    onToggleRecipient: (Long) -> Unit,
+    onCallRecipientChange: (Long) -> Unit,
+    onAddInlineRecipient: () -> Unit,
+    onGrantLoudMode: () -> Unit,
+    onGrantCallPhone: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                when (action) {
+                    is ActionUi.ForwardSms -> ForwardSmsBody(
+                        action = action,
+                        allRecipients = allRecipients,
+                        onToggleRecipient = onToggleRecipient,
+                        onAddInlineRecipient = onAddInlineRecipient
+                    )
+                    ActionUi.SetRingerLoud -> SetRingerLoudBody(
+                        showPermissionHint = showLoudModePermissionHint,
+                        onGrant = onGrantLoudMode
+                    )
+                    is ActionUi.PlaceCall -> PlaceCallBody(
+                        action = action,
+                        allRecipients = allRecipients,
+                        showPermissionHint = showCallPermissionHint,
+                        onCallRecipientChange = onCallRecipientChange,
+                        onAddInlineRecipient = onAddInlineRecipient,
+                        onGrant = onGrantCallPhone
+                    )
+                }
+            }
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Default.Close, contentDescription = "Remove action")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ForwardSmsBody(
+    action: ActionUi.ForwardSms,
+    allRecipients: List<Recipient>,
+    onToggleRecipient: (Long) -> Unit,
+    onAddInlineRecipient: () -> Unit
+) {
+    Column {
+        Text(
+            text = "Forward the text to",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium
+        )
+        if (allRecipients.isEmpty()) {
+            Text(
+                text = "No recipients yet. Add one below.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+        }
+        allRecipients.forEach { recipient ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = recipient.id in action.recipientIds,
+                    onCheckedChange = { onToggleRecipient(recipient.id) }
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(recipient.name, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        recipient.phoneNumber,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        TextButton(onClick = onAddInlineRecipient) {
+            Text("+ Add recipient")
+        }
+        action.error?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+private fun SetRingerLoudBody(showPermissionHint: Boolean, onGrant: () -> Unit) {
+    Column {
+        Text(
+            text = "Set the phone to loud mode",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            text = "Turns the ringer on and maxes the ring volume when this rule fires.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (showPermissionHint) {
+            Spacer(Modifier.height(8.dp))
+            PermissionHint(
+                message = "Grant Do Not Disturb access so loud mode works even when the phone is in DND.",
+                onGrant = onGrant
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaceCallBody(
+    action: ActionUi.PlaceCall,
+    allRecipients: List<Recipient>,
+    showPermissionHint: Boolean,
+    onCallRecipientChange: (Long) -> Unit,
+    onAddInlineRecipient: () -> Unit,
+    onGrant: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedRecipient = allRecipients.firstOrNull { it.id == action.recipientId }
+    Column {
+        Text(
+            text = "Place a call to",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium
+        )
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            OutlinedTextField(
+                value = selectedRecipient?.name ?: "",
+                onValueChange = {},
+                readOnly = true,
+                singleLine = true,
+                placeholder = { Text("Choose a recipient") },
+                isError = action.error != null,
+                supportingText = { action.error?.let { Text(it) } },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor()
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                allRecipients.forEach { recipient ->
+                    DropdownMenuItem(
+                        text = { Text("${recipient.name} — ${recipient.phoneNumber}") },
+                        onClick = {
+                            onCallRecipientChange(recipient.id)
+                            expanded = false
+                        }
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("+ Add recipient") },
+                    onClick = {
+                        expanded = false
+                        onAddInlineRecipient()
+                    }
+                )
+            }
+        }
+        if (showPermissionHint) {
+            Spacer(Modifier.height(8.dp))
+            PermissionHint(
+                message = "Grant the Call phone permission so this rule can place calls in the background.",
+                onGrant = onGrant
+            )
+        }
+    }
+}
+
+@Composable
+private fun PermissionHint(message: String, onGrant: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer
+            )
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onGrant) { Text("Grant") }
+        }
+    }
+}
+
+@Composable
+private fun AddActionButton(onAdd: (ActionKind) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text("+ Add action")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Forward the text to…") },
+                onClick = {
+                    onAdd(ActionKind.FORWARD_SMS)
+                    expanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Set the phone to loud mode") },
+                onClick = {
+                    onAdd(ActionKind.RINGER_LOUD)
+                    expanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Place a call to…") },
+                onClick = {
+                    onAdd(ActionKind.PLACE_CALL)
+                    expanded = false
+                }
+            )
         }
     }
 }
@@ -269,4 +705,25 @@ private fun InlineAddRecipientSheet(
             }
         }
     }
+}
+
+private val visibleOtpTypes: List<OtpType> = listOf(
+    OtpType.ALL,
+    OtpType.TRANSACTION,
+    OtpType.LOGIN,
+    OtpType.PARCEL_DELIVERY,
+    OtpType.REGISTRATION,
+    OtpType.PASSWORD_RESET,
+    OtpType.GOVERNMENT
+)
+
+internal fun otpTypeLabel(type: OtpType): String = when (type) {
+    OtpType.ALL -> "Is any OTP"
+    OtpType.TRANSACTION -> "Is a payment OTP"
+    OtpType.LOGIN -> "Is a login OTP"
+    OtpType.PARCEL_DELIVERY -> "Is a parcel delivery OTP"
+    OtpType.REGISTRATION -> "Is a registration OTP"
+    OtpType.PASSWORD_RESET -> "Is a password reset OTP"
+    OtpType.GOVERNMENT -> "Is a government OTP"
+    OtpType.UNKNOWN -> "Is any OTP"
 }
