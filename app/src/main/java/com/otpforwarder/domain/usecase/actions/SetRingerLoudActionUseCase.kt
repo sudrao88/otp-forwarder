@@ -1,9 +1,5 @@
 package com.otpforwarder.domain.usecase.actions
 
-import android.app.NotificationManager
-import android.media.AudioManager
-import android.os.Build
-import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,35 +15,25 @@ fun interface SetRingerLoudAction {
     operator fun invoke(): SetRingerLoudResult
 }
 
-data class SetRingerLoudResult(val ringerChanged: Boolean, val bypassedDnd: Boolean) {
-    val success: Boolean get() = ringerChanged
+data class SetRingerLoudResult(
+    val ringerChanged: Boolean,
+    val bypassedDnd: Boolean,
+    val dndWasActive: Boolean = false
+) {
+    // Truthful: if DND was active and we couldn't bypass it, the ringer flip was silenced anyway.
+    val success: Boolean get() = ringerChanged && (!dndWasActive || bypassedDnd)
 }
 
 @Singleton
 class SetRingerLoudActionUseCase @Inject constructor(
-    private val audioManager: AudioManager,
-    private val notificationManager: NotificationManager
+    private val ringerSystem: RingerSystem
 ) : SetRingerLoudAction {
 
     override fun invoke(): SetRingerLoudResult {
-        val bypassedDnd = tryBypassDnd()
-        val ringerChanged = runCatching {
-            audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
-            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
-            audioManager.setStreamVolume(AudioManager.STREAM_RING, max, 0)
-        }.onFailure { Log.w(TAG, "Failed to raise ringer volume", it) }.isSuccess
-        return SetRingerLoudResult(ringerChanged = ringerChanged, bypassedDnd = bypassedDnd)
-    }
-
-    private fun tryBypassDnd(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
-        if (!notificationManager.isNotificationPolicyAccessGranted) return false
-        return runCatching {
-            notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL)
-        }.onFailure { Log.w(TAG, "Failed to bypass DND", it) }.isSuccess
-    }
-
-    private companion object {
-        const val TAG = "SetRingerLoud"
+        val dndWasActive = ringerSystem.isDndActive()
+        val bypassedDnd = ringerSystem.canBypassDnd() && ringerSystem.bypassDnd()
+        val ringerChanged = ringerSystem.setRingerModeNormal()
+        ringerSystem.raiseRingerVolumeToMax()
+        return SetRingerLoudResult(ringerChanged, bypassedDnd, dndWasActive)
     }
 }

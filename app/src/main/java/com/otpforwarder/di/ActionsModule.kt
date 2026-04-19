@@ -1,11 +1,15 @@
 package com.otpforwarder.di
 
+import com.otpforwarder.domain.usecase.actions.AndroidRingerSystem
+import com.otpforwarder.domain.usecase.actions.AndroidTelecomSystem
 import com.otpforwarder.domain.usecase.actions.ForwardSmsAction
 import com.otpforwarder.domain.usecase.actions.ForwardSmsActionUseCase
 import com.otpforwarder.domain.usecase.actions.PlaceCallAction
 import com.otpforwarder.domain.usecase.actions.PlaceCallActionUseCase
+import com.otpforwarder.domain.usecase.actions.RingerSystem
 import com.otpforwarder.domain.usecase.actions.SetRingerLoudAction
 import com.otpforwarder.domain.usecase.actions.SetRingerLoudActionUseCase
+import com.otpforwarder.domain.usecase.actions.TelecomSystem
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -27,4 +31,12 @@ abstract class ActionsModule {
     @Binds
     @Singleton
     abstract fun bindPlaceCallAction(impl: PlaceCallActionUseCase): PlaceCallAction
+
+    @Binds
+    @Singleton
+    abstract fun bindRingerSystem(impl: AndroidRingerSystem): RingerSystem
+
+    @Binds
+    @Singleton
+    abstract fun bindTelecomSystem(impl: AndroidTelecomSystem): TelecomSystem
 }

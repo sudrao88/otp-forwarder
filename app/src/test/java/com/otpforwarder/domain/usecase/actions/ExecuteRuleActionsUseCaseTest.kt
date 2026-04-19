@@ -6,6 +6,7 @@ import com.otpforwarder.domain.model.OtpType
 import com.otpforwarder.domain.model.Recipient
 import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.sms.SmsSender
+import com.otpforwarder.domain.usecase.actions.ExecuteRuleActionsUseCase.ActionOutcome.Status
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -103,6 +104,7 @@ class ExecuteRuleActionsUseCaseTest {
         assertEquals(3, outcomes.size)
         assertEquals(actions, outcomes.map { it.action })
         assertTrue(outcomes.all { it.success })
+        assertTrue(outcomes.all { it.status == Status.SUCCESS })
         assertEquals(listOf("+111" to "OTP 482910"), sender.sent)
         assertEquals(1, ringer.calls)
         assertEquals(listOf(dad), call.called)
@@ -124,6 +126,8 @@ class ExecuteRuleActionsUseCaseTest {
         assertEquals(2, outcomes.size)
         assertTrue("forward should succeed", outcomes[0].success)
         assertFalse("call should fail", outcomes[1].success)
+        assertEquals(Status.SUCCESS, outcomes[0].status)
+        assertEquals(Status.FAILED, outcomes[1].status)
         assertEquals(listOf("+111" to "OTP 482910"), sender.sent)
         assertEquals(listOf(dad), call.called)
         assertTrue(outcomes[0].summary.contains("Mom"))
@@ -147,7 +151,7 @@ class ExecuteRuleActionsUseCaseTest {
     }
 
     @Test
-    fun `forward dedupes recipients already attempted for this OTP`() {
+    fun `forward dedupes recipients already attempted, summary tags them as 'already sent'`() {
         val sender = FakeSmsSender()
         val alreadySent = mutableSetOf<Long>()
         // First rule forwards to Mom + Dad.
@@ -166,8 +170,37 @@ class ExecuteRuleActionsUseCaseTest {
             alreadySentTo = alreadySent
         )
         assertEquals(2, sender.sent.size)
-        val summary = outcomes.single().summary
-        assertTrue("expected dedup skip in summary, got: $summary", summary.startsWith("Forwarded:"))
+        val outcome = outcomes.single()
+        assertEquals(Status.SKIPPED, outcome.status)
+        assertFalse(outcome.success)
+        assertTrue(
+            "expected 'already sent' in summary, got: ${outcome.summary}",
+            outcome.summary.contains("already sent: Mom, Dad")
+        )
+        assertFalse(
+            "dedup-skipped recipients must NOT be listed under 'Forwarded:', got: ${outcome.summary}",
+            outcome.summary.startsWith("Forwarded:")
+        )
+    }
+
+    @Test
+    fun `forward with a mix of sent and skipped lists only sent under Forwarded`() {
+        val sender = FakeSmsSender()
+        val alreadySent = mutableSetOf(mom.id) // Mom was already reached by an earlier rule.
+        val outcomes = run(
+            actions = listOf(RuleAction.ForwardSms(listOf(mom.id, dad.id))),
+            sender = sender,
+            alreadySentTo = alreadySent
+        )
+        val outcome = outcomes.single()
+        assertEquals(Status.SUCCESS, outcome.status)
+        // Only Dad was sent; Mom appears in the '(already sent: …)' segment.
+        assertTrue(outcome.summary.startsWith("Forwarded: Dad"))
+        assertTrue(outcome.summary.contains("(already sent: Mom)"))
+        assertFalse(
+            "'Forwarded:' line must not include dedup-skipped Mom, got: ${outcome.summary}",
+            outcome.summary.contains("Forwarded: Mom")
+        )
     }
 
     @Test
@@ -180,6 +213,7 @@ class ExecuteRuleActionsUseCaseTest {
             ),
             sender = sender
         )
+        assertEquals(Status.FAILED, outcomes[0].status)
         assertFalse(outcomes[0].success)
         assertTrue(outcomes[0].summary.contains("failed", ignoreCase = true))
         assertTrue(outcomes[1].success)
@@ -193,7 +227,7 @@ class ExecuteRuleActionsUseCaseTest {
             call = FakePlaceCall()
         )
         assertEquals(1, outcomes.size)
-        assertFalse(outcomes[0].success)
+        assertEquals(Status.FAILED, outcomes[0].status)
         assertTrue(outcomes[0].summary.contains("missing", ignoreCase = true))
     }
 
@@ -204,10 +238,26 @@ class ExecuteRuleActionsUseCaseTest {
     }
 
     @Test
-    fun `ringer summary reflects DND bypass state`() {
-        val loudNoDnd = FakeRingerLoud(SetRingerLoudResult(ringerChanged = true, bypassedDnd = false))
+    fun `ringer succeeds when DND was not active even if bypass was not attempted`() {
+        val loudNoDnd = FakeRingerLoud(
+            SetRingerLoudResult(ringerChanged = true, bypassedDnd = false, dndWasActive = false)
+        )
         val outcomes = run(actions = listOf(RuleAction.SetRingerLoud), ringer = loudNoDnd)
-        assertTrue(outcomes[0].success)
-        assertTrue(outcomes[0].summary.contains("DND not bypassed"))
+        assertEquals(Status.SUCCESS, outcomes[0].status)
+        assertEquals("Rang loudly", outcomes[0].summary)
+    }
+
+    @Test
+    fun `ringer fails when DND was active and bypass was denied`() {
+        val loudButDnd = FakeRingerLoud(
+            SetRingerLoudResult(ringerChanged = true, bypassedDnd = false, dndWasActive = true)
+        )
+        val outcomes = run(actions = listOf(RuleAction.SetRingerLoud), ringer = loudButDnd)
+        assertEquals(Status.FAILED, outcomes[0].status)
+        assertFalse(outcomes[0].success)
+        assertTrue(
+            "expected DND mention in summary, got: ${outcomes[0].summary}",
+            outcomes[0].summary.contains("DND", ignoreCase = true)
+        )
     }
 }

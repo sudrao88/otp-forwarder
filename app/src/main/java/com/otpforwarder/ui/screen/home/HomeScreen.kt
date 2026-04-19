@@ -198,5 +198,6 @@ private fun statusLabel(status: String, failed: Boolean): String = when {
     failed -> "\u2717 Failed (tap to retry)"
     status == ProcessIncomingSmsUseCase.STATUS_SENT -> "\u2713 Sent"
     status == ProcessIncomingSmsUseCase.STATUS_PARTIAL -> "\u25D1 Partial"
+    status == ProcessIncomingSmsUseCase.STATUS_SKIPPED -> "\u23ED Skipped"
     else -> status
 }

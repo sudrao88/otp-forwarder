@@ -30,14 +30,17 @@ class ForwardingRuleRepositoryImpl @Inject constructor(
     override suspend fun getEnabledRulesWithDetails(): List<ForwardingRule> =
         forwardingRuleDao.getEnabledRulesWithDetails().map { it.toDomain() }
 
-    override suspend fun insertRule(rule: ForwardingRule): Long =
-        database.withTransaction {
+    override suspend fun insertRule(rule: ForwardingRule): Long {
+        require(rule.actions.isNotEmpty()) { "Forwarding rule must declare at least one action" }
+        return database.withTransaction {
             val ruleId = forwardingRuleDao.insertRule(rule.toRuleEntity())
             writeConditionsAndActions(ruleId, rule)
             ruleId
         }
+    }
 
     override suspend fun updateRule(rule: ForwardingRule) {
+        require(rule.actions.isNotEmpty()) { "Forwarding rule must declare at least one action" }
         database.withTransaction {
             forwardingRuleDao.updateRule(rule.toRuleEntity())
             forwardingRuleDao.deleteConditionsForRule(rule.id)

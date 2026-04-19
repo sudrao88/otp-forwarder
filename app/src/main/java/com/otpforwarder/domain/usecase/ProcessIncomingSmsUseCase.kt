@@ -47,11 +47,14 @@ class ProcessIncomingSmsUseCase @Inject constructor(
         val alreadySentTo = mutableSetOf<Long>()
         for (rule in matchingRules) {
             val outcomes = executeRuleActions(otp, rule.actions, recipientsById, alreadySentTo)
+            val anySuccess = outcomes.any { it.status == ExecuteRuleActionsUseCase.ActionOutcome.Status.SUCCESS }
+            val anyFailed = outcomes.any { it.status == ExecuteRuleActionsUseCase.ActionOutcome.Status.FAILED }
             val status = when {
                 outcomes.isEmpty() -> STATUS_FAILED
-                outcomes.all { it.success } -> STATUS_SENT
-                outcomes.none { it.success } -> STATUS_FAILED
-                else -> STATUS_PARTIAL
+                anySuccess && anyFailed -> STATUS_PARTIAL
+                anySuccess -> STATUS_SENT
+                anyFailed -> STATUS_FAILED
+                else -> STATUS_SKIPPED
             }
             otpLogRepository.insertLog(
                 OtpLogEntry(
@@ -88,5 +91,6 @@ class ProcessIncomingSmsUseCase @Inject constructor(
         const val STATUS_SENT = "Sent"
         const val STATUS_FAILED = "Failed"
         const val STATUS_PARTIAL = "Partial"
+        const val STATUS_SKIPPED = "Skipped"
     }
 }

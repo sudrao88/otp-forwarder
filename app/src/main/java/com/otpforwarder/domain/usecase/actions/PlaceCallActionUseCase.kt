@@ -1,19 +1,12 @@
 package com.otpforwarder.domain.usecase.actions
 
-import android.Manifest
-import android.content.Context
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.telecom.TelecomManager
 import android.util.Log
-import androidx.core.content.ContextCompat
 import com.otpforwarder.domain.model.Recipient
-import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Places a silent outbound call to the given [Recipient] via [TelecomManager].
+ * Places a silent outbound call to the given [Recipient] via [TelecomSystem].
  *
  * Works from the foreground service without an activity because `placeCall`
  * just hands the dial intent to the telephony stack and returns; the call
@@ -33,30 +26,22 @@ data class PlaceCallResult(
 
 @Singleton
 class PlaceCallActionUseCase @Inject constructor(
-    @ApplicationContext private val context: Context,
-    private val telecomManager: TelecomManager
+    private val telecom: TelecomSystem
 ) : PlaceCallAction {
 
     override fun invoke(recipient: Recipient): PlaceCallResult {
-        if (!hasCallPhonePermission()) {
+        if (!telecom.hasCallPhonePermission()) {
             Log.w(TAG, "CALL_PHONE permission not granted; skipping call to ${recipient.name}")
             return PlaceCallResult(recipient, success = false, reason = REASON_NO_PERMISSION)
         }
         return runCatching {
-            val uri = Uri.fromParts("tel", recipient.phoneNumber, null)
-            telecomManager.placeCall(uri, null)
+            telecom.placeCall(recipient.phoneNumber)
             PlaceCallResult(recipient, success = true, reason = null)
         }.getOrElse { t ->
             Log.e(TAG, "placeCall failed for ${recipient.name}", t)
             PlaceCallResult(recipient, success = false, reason = t.message ?: REASON_UNKNOWN)
         }
     }
-
-    private fun hasCallPhonePermission(): Boolean =
-        ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.CALL_PHONE
-        ) == PackageManager.PERMISSION_GRANTED
 
     private companion object {
         const val TAG = "PlaceCall"
