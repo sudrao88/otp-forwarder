@@ -20,6 +20,9 @@ data class OtpLogEntry(
     val forwardedAt: Instant
 )
 
+// Non-comma so action summaries like "Forwarded: Mom, Dad" round-trip intact.
+private const val SUMMARY_SEPARATOR = "; "
+
 fun OtpLogEntity.toDomain(): OtpLogEntry = OtpLogEntry(
     id = id,
     code = code,
@@ -30,7 +33,7 @@ fun OtpLogEntity.toDomain(): OtpLogEntry = OtpLogEntry(
     confidence = confidence,
     classifierTier = ClassifierTier.valueOf(classifierTier),
     ruleName = ruleName,
-    recipientNames = recipientNames.split(",").map { it.trim() },
+    recipientNames = recipientNames.split(SUMMARY_SEPARATOR).map { it.trim() },
     status = status,
     forwardedAt = Instant.ofEpochMilli(forwardedAt)
 )
@@ -45,7 +48,7 @@ fun OtpLogEntry.toEntity(): OtpLogEntity = OtpLogEntity(
     confidence = confidence,
     classifierTier = classifierTier.name,
     ruleName = ruleName,
-    recipientNames = recipientNames.joinToString(", "),
+    recipientNames = recipientNames.joinToString(SUMMARY_SEPARATOR),
     status = status,
     forwardedAt = forwardedAt.toEpochMilli()
 )

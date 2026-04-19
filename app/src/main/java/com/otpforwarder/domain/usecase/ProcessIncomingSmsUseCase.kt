@@ -5,9 +5,9 @@ import com.otpforwarder.domain.classification.OtpClassifier
 import com.otpforwarder.domain.detection.OtpDetector
 import com.otpforwarder.domain.engine.RuleEngine
 import com.otpforwarder.domain.model.Otp
-import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.repository.OtpLogRepository
 import com.otpforwarder.domain.repository.RecipientRepository
+import com.otpforwarder.domain.usecase.actions.ExecuteRuleActionsUseCase
 import java.time.Clock
 import java.time.Instant
 import javax.inject.Inject
@@ -15,13 +15,12 @@ import javax.inject.Singleton
 
 /**
  * Orchestrates a single inbound SMS through the full pipeline:
- *   detect → classify (tiered) → match rules → forward → log.
+ *   detect → classify (tiered) → match rules → dispatch actions → log.
  *
  * Non-OTP messages short-circuit and produce no log entry. OTPs that match no
  * rule are likewise not logged (nothing was forwarded). Every matching rule
- * produces its own log entry so the user can see which rules fired, even when
- * a lower-priority rule's recipients were all already reached via a
- * higher-priority rule. Sends themselves are deduped across rules so one
+ * produces its own log entry so the user can see which rules fired; forward
+ * sends are deduped across rules via a shared `alreadySentTo` set so one
  * recipient never receives the same OTP twice.
  */
 @Singleton
@@ -29,7 +28,7 @@ class ProcessIncomingSmsUseCase @Inject constructor(
     private val detector: OtpDetector,
     private val classifier: OtpClassifier,
     private val ruleEngine: RuleEngine,
-    private val forwardOtp: ForwardOtpUseCase,
+    private val executeRuleActions: ExecuteRuleActionsUseCase,
     private val recipientRepository: RecipientRepository,
     private val otpLogRepository: OtpLogRepository,
     private val clock: Clock
@@ -45,19 +44,13 @@ class ProcessIncomingSmsUseCase @Inject constructor(
 
         val recipientsById = recipientRepository.getActiveRecipients().associateBy { it.id }
         val now = Instant.now(clock)
-        val attempted = mutableMapOf<Long, Boolean>()
+        val alreadySentTo = mutableSetOf<Long>()
         for (rule in matchingRules) {
-            val recipientIds = rule.actions.filterIsInstance<RuleAction.ForwardSms>()
-                .flatMap { it.recipientIds }
-                .distinct()
-            val recipients = recipientIds.mapNotNull { recipientsById[it] }
-            val outcomes = recipients.map { recipient ->
-                attempted.getOrPut(recipient.id) { forwardOtp(otp, recipient) }
-            }
-            val successes = outcomes.count { it }
-            val status = when (successes) {
-                recipients.size -> STATUS_SENT
-                0 -> STATUS_FAILED
+            val outcomes = executeRuleActions(otp, rule.actions, recipientsById, alreadySentTo)
+            val status = when {
+                outcomes.isEmpty() -> STATUS_FAILED
+                outcomes.all { it.success } -> STATUS_SENT
+                outcomes.none { it.success } -> STATUS_FAILED
                 else -> STATUS_PARTIAL
             }
             otpLogRepository.insertLog(
@@ -71,7 +64,7 @@ class ProcessIncomingSmsUseCase @Inject constructor(
                     confidence = otp.confidence,
                     classifierTier = otp.classifierTier,
                     ruleName = rule.name,
-                    recipientNames = recipients.map { it.name },
+                    recipientNames = outcomes.map { it.summary },
                     status = status,
                     forwardedAt = now
                 )
