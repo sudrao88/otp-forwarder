@@ -60,18 +60,34 @@ recommended).
 ./gradlew assembleRelease
 ```
 
-CI on GitHub Actions runs `./gradlew test` and `./gradlew assembleDebug` on
-every push and pull request, and uploads the debug APK as an artifact.
+CI on GitHub Actions runs `./gradlew test`, `./gradlew lintDebug`,
+`./gradlew assembleDebug`, and `./gradlew assembleRelease` on every push and
+pull request, and uploads the debug + release APKs as artifacts.
 
 ## Permissions
 
-The app requests three runtime permissions:
+Requested at onboarding (runtime, install-grouped):
 
 | Permission          | Why it is needed                                       |
 | ------------------- | ------------------------------------------------------ |
 | `RECEIVE_SMS`       | Observe incoming SMS messages to detect OTPs           |
 | `SEND_SMS`          | Forward the extracted OTP to configured recipients     |
 | `POST_NOTIFICATIONS`| Surface "Sent / Failed / Retrying" status (Android 13+) |
+
+Requested per-rule or on demand (only when the relevant action is configured):
+
+| Permission                     | Why it is needed                                                    |
+| ------------------------------ | ------------------------------------------------------------------- |
+| `CALL_PHONE`                   | Place outbound calls for rules that use the "Place call" action     |
+| `MODIFY_AUDIO_SETTINGS`        | Raise ringer volume for rules that use the "Set ringer loud" action |
+| `ACCESS_NOTIFICATION_POLICY`   | Bypass Do Not Disturb when the "Set ringer loud" action fires       |
+
+Declared but non-prompting:
+
+| Permission                            | Why it is needed                                        |
+| ------------------------------------- | ------------------------------------------------------- |
+| `FOREGROUND_SERVICE`                  | Run the short-lived OTP processing service              |
+| `FOREGROUND_SERVICE_SHORT_SERVICE`    | Declare the `shortService` foreground-service type (API 34+) |
 
 No internet permission is declared — the app never reaches the network.
 

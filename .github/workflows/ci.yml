@@ -29,14 +29,17 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
       - name: Run unit tests
         run: ./gradlew test --stacktrace
 
+      - name: Lint debug
+        run: ./gradlew lintDebug --stacktrace
+
       - name: Assemble debug APK
         run: ./gradlew assembleDebug --stacktrace
+
+      - name: Assemble release APK (R8/ProGuard)
+        run: ./gradlew assembleRelease --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -46,11 +49,28 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-reports
           path: app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-*.html
           if-no-files-found: ignore
           retention-days: 7

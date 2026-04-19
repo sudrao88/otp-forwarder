@@ -1,6 +1,7 @@
 package com.otpforwarder.domain.usecase.actions
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -31,6 +32,7 @@ class AndroidTelecomSystem @Inject constructor(
             Manifest.permission.CALL_PHONE
         ) == PackageManager.PERMISSION_GRANTED
 
+    @SuppressLint("MissingPermission")
     override fun placeCall(phoneNumber: String) {
         val uri = Uri.fromParts("tel", phoneNumber, null)
         telecomManager.placeCall(uri, null)

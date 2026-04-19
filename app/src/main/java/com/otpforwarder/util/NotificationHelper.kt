@@ -1,6 +1,7 @@
 package com.otpforwarder.util
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -108,6 +109,7 @@ class NotificationHelper @Inject constructor(
         )
     }
 
+    @SuppressLint("MissingPermission")
     private fun notify(id: Int, title: String, text: String, smallIcon: Int) {
         if (!hasPostNotificationsPermission()) return
         val notification = NotificationCompat.Builder(context, CHANNEL_RESULTS)
