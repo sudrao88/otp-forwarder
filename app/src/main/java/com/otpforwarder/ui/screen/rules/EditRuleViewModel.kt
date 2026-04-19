@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 
 @HiltViewModel
@@ -30,11 +31,13 @@ class EditRuleViewModel @Inject constructor(
     private val permissionHelper: PermissionHelper
 ) : ViewModel() {
 
-    private val editingRuleId: Long = savedStateHandle.get<String>(Destinations.EDIT_RULE_ARG)
-        ?.toLongOrNull() ?: 0L
+    private val editingRuleId: Long = savedStateHandle.get<Long>(Destinations.EDIT_RULE_ARG) ?: 0L
 
     private val prefilledRecipientId: Long? =
         savedStateHandle.get<String>(Destinations.ADD_RULE_WITH_RECIPIENT_ARG)?.toLongOrNull()
+
+    private val actionUidSource = AtomicLong(0L)
+    private fun nextActionUid(): Long = actionUidSource.incrementAndGet()
 
     private val _state = MutableStateFlow(EditRuleUiState(isEditing = editingRuleId != 0L))
     val state: StateFlow<EditRuleUiState> = _state.asStateFlow()
@@ -50,7 +53,7 @@ class EditRuleViewModel @Inject constructor(
                             name = existing.name,
                             priority = existing.priority.toString(),
                             conditions = existing.conditions.map(::toConditionUi),
-                            actions = existing.actions.map(::toActionUi),
+                            actions = existing.actions.map { a -> toActionUi(a, nextActionUid()) },
                             allRecipients = allRecipients
                         )
                     }
@@ -60,7 +63,7 @@ class EditRuleViewModel @Inject constructor(
             val initialActions = buildList<ActionUi> {
                 val preId = prefilledRecipientId?.takeIf { id -> allRecipients.any { it.id == id } }
                 if (preId != null) {
-                    add(ActionUi.ForwardSms(recipientIds = setOf(preId)))
+                    add(ActionUi.ForwardSms(actionUid = nextActionUid(), recipientIds = setOf(preId)))
                 }
             }
             _state.update {
@@ -72,17 +75,16 @@ class EditRuleViewModel @Inject constructor(
         }
     }
 
-    fun setName(v: String) = _state.update { it.copy(name = v, nameError = null) }
+    fun setName(v: String) = _state.update { it.copy(name = v, nameError = null, generalError = null) }
     fun setPriority(v: String) = _state.update { it.copy(priority = v.filter { c -> c.isDigit() }) }
 
     fun addCondition(kind: ConditionKind) = _state.update { s ->
-        val connector = if (s.conditions.isEmpty()) Connector.AND else Connector.AND
         val new: ConditionUi = when (kind) {
-            ConditionKind.OTP_TYPE -> ConditionUi.OtpTypeIs(OtpType.ALL, connector)
-            ConditionKind.SENDER -> ConditionUi.SenderMatches("", connector)
-            ConditionKind.BODY -> ConditionUi.BodyContains("", connector)
+            ConditionKind.OTP_TYPE -> ConditionUi.OtpTypeIs(OtpType.ALL, Connector.AND)
+            ConditionKind.SENDER -> ConditionUi.SenderMatches("", Connector.AND)
+            ConditionKind.BODY -> ConditionUi.BodyContains("", Connector.AND)
         }
-        s.copy(conditions = s.conditions + new)
+        s.copy(conditions = s.conditions + new, generalError = null)
     }
 
     fun setConditionOtpType(index: Int, type: OtpType) = _state.update { s ->
@@ -99,7 +101,7 @@ class EditRuleViewModel @Inject constructor(
             is ConditionUi.BodyContains -> c.copy(pattern = pattern, error = null)
             is ConditionUi.OtpTypeIs -> c
         }
-        s.copy(conditions = list)
+        s.copy(conditions = list, generalError = null)
     }
 
     fun toggleConnector(index: Int) = _state.update { s ->
@@ -115,49 +117,59 @@ class EditRuleViewModel @Inject constructor(
 
     fun removeCondition(index: Int) = _state.update { s ->
         if (index !in s.conditions.indices) return@update s
-        s.copy(conditions = s.conditions.toMutableList().apply { removeAt(index) })
+        s.copy(
+            conditions = s.conditions.toMutableList().apply { removeAt(index) },
+            generalError = null
+        )
     }
 
     fun addAction(kind: ActionKind) = _state.update { s ->
         val new: ActionUi = when (kind) {
-            ActionKind.FORWARD_SMS -> ActionUi.ForwardSms(emptySet())
-            ActionKind.RINGER_LOUD -> ActionUi.SetRingerLoud
-            ActionKind.PLACE_CALL -> ActionUi.PlaceCall(null)
+            ActionKind.FORWARD_SMS -> ActionUi.ForwardSms(actionUid = nextActionUid(), recipientIds = emptySet())
+            ActionKind.RINGER_LOUD -> ActionUi.SetRingerLoud(actionUid = nextActionUid())
+            ActionKind.PLACE_CALL -> ActionUi.PlaceCall(actionUid = nextActionUid(), recipientId = null)
         }
         s.copy(
             actions = s.actions + new,
             showLoudModePermissionHint = s.showLoudModePermissionHint ||
                 (kind == ActionKind.RINGER_LOUD && !permissionHelper.hasNotificationPolicyAccess()),
             showCallPermissionHint = s.showCallPermissionHint ||
-                (kind == ActionKind.PLACE_CALL && !permissionHelper.hasCallPhone())
+                (kind == ActionKind.PLACE_CALL && !permissionHelper.hasCallPhone()),
+            generalError = null
         )
     }
 
-    fun toggleActionRecipient(index: Int, recipientId: Long) = _state.update { s ->
+    fun toggleActionRecipient(actionUid: Long, recipientId: Long) = _state.update { s ->
+        val index = s.actions.indexOfFirst { it.actionUid == actionUid }
+        if (index < 0) return@update s
         val list = s.actions.toMutableList()
-        val a = list.getOrNull(index) as? ActionUi.ForwardSms ?: return@update s
+        val a = list[index] as? ActionUi.ForwardSms ?: return@update s
         val ids = if (recipientId in a.recipientIds) a.recipientIds - recipientId
         else a.recipientIds + recipientId
         list[index] = a.copy(recipientIds = ids, error = null)
         s.copy(actions = list)
     }
 
-    fun setCallRecipient(index: Int, recipientId: Long) = _state.update { s ->
+    fun setCallRecipient(actionUid: Long, recipientId: Long) = _state.update { s ->
+        val index = s.actions.indexOfFirst { it.actionUid == actionUid }
+        if (index < 0) return@update s
         val list = s.actions.toMutableList()
-        val a = list.getOrNull(index) as? ActionUi.PlaceCall ?: return@update s
+        val a = list[index] as? ActionUi.PlaceCall ?: return@update s
         list[index] = a.copy(recipientId = recipientId, error = null)
         s.copy(actions = list)
     }
 
-    fun removeAction(index: Int) = _state.update { s ->
-        if (index !in s.actions.indices) return@update s
+    fun removeAction(actionUid: Long) = _state.update { s ->
+        val index = s.actions.indexOfFirst { it.actionUid == actionUid }
+        if (index < 0) return@update s
         val list = s.actions.toMutableList().apply { removeAt(index) }
         s.copy(
             actions = list,
             showLoudModePermissionHint = list.any { it is ActionUi.SetRingerLoud } &&
                 !permissionHelper.hasNotificationPolicyAccess(),
             showCallPermissionHint = list.any { it is ActionUi.PlaceCall } &&
-                !permissionHelper.hasCallPhone()
+                !permissionHelper.hasCallPhone(),
+            generalError = null
         )
     }
 
@@ -268,7 +280,7 @@ class EditRuleViewModel @Inject constructor(
             if (a.recipientIds.isEmpty()) a.copy(error = "Choose at least one recipient") else a.copy(error = null)
         is ActionUi.PlaceCall ->
             if (a.recipientId == null) a.copy(error = "Choose a recipient") else a.copy(error = null)
-        ActionUi.SetRingerLoud -> a
+        is ActionUi.SetRingerLoud -> a
     }
 
     private fun validatePattern(pattern: String): String? {
@@ -288,7 +300,7 @@ class EditRuleViewModel @Inject constructor(
     private fun actionHasError(a: ActionUi): Boolean = when (a) {
         is ActionUi.ForwardSms -> a.error != null
         is ActionUi.PlaceCall -> a.error != null
-        ActionUi.SetRingerLoud -> false
+        is ActionUi.SetRingerLoud -> false
     }
 
     data class EditRuleUiState(
@@ -333,14 +345,20 @@ sealed interface ConditionUi {
 }
 
 sealed interface ActionUi {
+    val actionUid: Long
+
     data class ForwardSms(
+        override val actionUid: Long,
         val recipientIds: Set<Long>,
         val error: String? = null
     ) : ActionUi
 
-    data object SetRingerLoud : ActionUi
+    data class SetRingerLoud(
+        override val actionUid: Long
+    ) : ActionUi
 
     data class PlaceCall(
+        override val actionUid: Long,
         val recipientId: Long?,
         val error: String? = null
     ) : ActionUi
@@ -353,7 +371,10 @@ private fun withConnector(c: ConditionUi, connector: Connector): ConditionUi = w
 }
 
 private fun toConditionUi(c: RuleCondition): ConditionUi = when (c) {
-    is RuleCondition.OtpTypeIs -> ConditionUi.OtpTypeIs(c.type, c.connector)
+    is RuleCondition.OtpTypeIs -> {
+        val uiType = if (c.type == OtpType.UNKNOWN) OtpType.ALL else c.type
+        ConditionUi.OtpTypeIs(uiType, c.connector)
+    }
     is RuleCondition.SenderMatches -> ConditionUi.SenderMatches(c.pattern, c.connector)
     is RuleCondition.BodyContains -> ConditionUi.BodyContains(c.pattern, c.connector)
 }
@@ -364,15 +385,15 @@ private fun toDomainCondition(c: ConditionUi): RuleCondition = when (c) {
     is ConditionUi.BodyContains -> RuleCondition.BodyContains(c.pattern, c.connector)
 }
 
-private fun toActionUi(a: RuleAction): ActionUi = when (a) {
-    is RuleAction.ForwardSms -> ActionUi.ForwardSms(a.recipientIds.toSet())
-    RuleAction.SetRingerLoud -> ActionUi.SetRingerLoud
-    is RuleAction.PlaceCall -> ActionUi.PlaceCall(a.recipientId)
+private fun toActionUi(a: RuleAction, uid: Long): ActionUi = when (a) {
+    is RuleAction.ForwardSms -> ActionUi.ForwardSms(actionUid = uid, recipientIds = a.recipientIds.toSet())
+    RuleAction.SetRingerLoud -> ActionUi.SetRingerLoud(actionUid = uid)
+    is RuleAction.PlaceCall -> ActionUi.PlaceCall(actionUid = uid, recipientId = a.recipientId)
 }
 
 private fun toDomainAction(a: ActionUi): RuleAction = when (a) {
     is ActionUi.ForwardSms -> RuleAction.ForwardSms(a.recipientIds.toList())
-    ActionUi.SetRingerLoud -> RuleAction.SetRingerLoud
+    is ActionUi.SetRingerLoud -> RuleAction.SetRingerLoud
     is ActionUi.PlaceCall -> RuleAction.PlaceCall(requireNotNull(a.recipientId))
 }
 

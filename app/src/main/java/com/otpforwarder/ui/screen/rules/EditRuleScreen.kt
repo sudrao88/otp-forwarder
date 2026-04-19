@@ -16,12 +16,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -65,7 +66,7 @@ fun EditRuleScreen(
     viewModel: EditRuleViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var addRecipientTargetAction by remember { mutableStateOf<Int?>(null) }
+    var addRecipientTargetActionUid by remember { mutableStateOf<Long?>(null) }
 
     val callPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -135,7 +136,7 @@ fun EditRuleScreen(
                 onRemove = viewModel::removeAction,
                 onToggleRecipient = viewModel::toggleActionRecipient,
                 onCallRecipientChange = viewModel::setCallRecipient,
-                onAddInlineRecipient = { addRecipientTargetAction = it },
+                onAddInlineRecipient = { uid -> addRecipientTargetActionUid = uid },
                 onGrantLoudMode = viewModel::openNotificationPolicySettings,
                 onGrantCallPhone = { callPermissionLauncher.launch(Manifest.permission.CALL_PHONE) }
             )
@@ -187,17 +188,17 @@ fun EditRuleScreen(
         )
     }
 
-    addRecipientTargetAction?.let { actionIndex ->
+    addRecipientTargetActionUid?.let { actionUid ->
         InlineAddRecipientSheet(
-            onDismiss = { addRecipientTargetAction = null },
+            onDismiss = { addRecipientTargetActionUid = null },
             onAdd = { name, phone ->
                 viewModel.addInlineRecipient(name, phone) { newId ->
-                    when (val a = state.actions.getOrNull(actionIndex)) {
-                        is ActionUi.ForwardSms -> viewModel.toggleActionRecipient(actionIndex, newId)
-                        is ActionUi.PlaceCall -> viewModel.setCallRecipient(actionIndex, newId)
+                    when (state.actions.firstOrNull { it.actionUid == actionUid }) {
+                        is ActionUi.ForwardSms -> viewModel.toggleActionRecipient(actionUid, newId)
+                        is ActionUi.PlaceCall -> viewModel.setCallRecipient(actionUid, newId)
                         else -> Unit
                     }
-                    addRecipientTargetAction = null
+                    addRecipientTargetActionUid = null
                 }
             }
         )
@@ -227,9 +228,9 @@ private fun ConditionsSection(
 
         conditions.forEachIndexed { index, condition ->
             if (index > 0) {
-                ConnectorButton(
+                ConnectorSelector(
                     connector = condition.connector,
-                    onClick = { onToggleConnector(index) }
+                    onToggle = { onToggleConnector(index) }
                 )
             }
             ConditionRow(
@@ -245,17 +246,20 @@ private fun ConditionsSection(
 }
 
 @Composable
-private fun ConnectorButton(connector: Connector, onClick: () -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-        AssistChip(
-            onClick = onClick,
-            label = { Text(connector.name) },
-            trailingIcon = {
-                Icon(
-                    Icons.Default.ArrowDropDown,
-                    contentDescription = "Toggle connector"
-                )
-            }
+private fun ConnectorSelector(connector: Connector, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+    ) {
+        FilterChip(
+            selected = connector == Connector.AND,
+            onClick = { if (connector != Connector.AND) onToggle() },
+            label = { Text("AND") }
+        )
+        FilterChip(
+            selected = connector == Connector.OR,
+            onClick = { if (connector != Connector.OR) onToggle() },
+            label = { Text("OR") }
         )
     }
 }
@@ -342,6 +346,7 @@ private fun OtpTypeConditionBody(type: OtpType, onChange: (OtpType) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PatternConditionBody(
     prefix: String,
@@ -353,23 +358,41 @@ private fun PatternConditionBody(
     suffix: String? = null
 ) {
     Column {
-        Text(
-            text = prefix,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium
-        )
-        OutlinedTextField(
-            value = pattern,
-            onValueChange = onChange,
-            singleLine = true,
-            placeholder = { Text(placeholder) },
-            isError = error != null,
-            supportingText = { Text(error ?: helper) },
-            modifier = Modifier.fillMaxWidth()
-        )
-        suffix?.let {
-            Text(it, style = MaterialTheme.typography.bodyMedium)
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.Center,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = prefix,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.align(Alignment.CenterVertically)
+            )
+            OutlinedTextField(
+                value = pattern,
+                onValueChange = onChange,
+                singleLine = true,
+                placeholder = { Text(placeholder) },
+                isError = error != null,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            suffix?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                )
+            }
         }
+        Text(
+            text = error ?: helper,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (error != null) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }
 
@@ -413,10 +436,10 @@ private fun ActionsSection(
     showLoudModePermissionHint: Boolean,
     showCallPermissionHint: Boolean,
     onAdd: (ActionKind) -> Unit,
-    onRemove: (Int) -> Unit,
-    onToggleRecipient: (Int, Long) -> Unit,
-    onCallRecipientChange: (Int, Long) -> Unit,
-    onAddInlineRecipient: (Int) -> Unit,
+    onRemove: (Long) -> Unit,
+    onToggleRecipient: (Long, Long) -> Unit,
+    onCallRecipientChange: (Long, Long) -> Unit,
+    onAddInlineRecipient: (Long) -> Unit,
     onGrantLoudMode: () -> Unit,
     onGrantCallPhone: () -> Unit
 ) {
@@ -426,28 +449,33 @@ private fun ActionsSection(
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold
         )
-        actions.forEachIndexed { index, action ->
+        actions.forEach { action ->
+            val uid = action.actionUid
             ActionRow(
-                index = index,
                 action = action,
                 allRecipients = allRecipients,
                 showLoudModePermissionHint = showLoudModePermissionHint,
                 showCallPermissionHint = showCallPermissionHint,
-                onRemove = { onRemove(index) },
-                onToggleRecipient = { onToggleRecipient(index, it) },
-                onCallRecipientChange = { onCallRecipientChange(index, it) },
-                onAddInlineRecipient = { onAddInlineRecipient(index) },
+                onRemove = { onRemove(uid) },
+                onToggleRecipient = { onToggleRecipient(uid, it) },
+                onCallRecipientChange = { onCallRecipientChange(uid, it) },
+                onAddInlineRecipient = { onAddInlineRecipient(uid) },
                 onGrantLoudMode = onGrantLoudMode,
                 onGrantCallPhone = onGrantCallPhone
             )
         }
-        AddActionButton(onAdd = onAdd)
+        val hasForward = actions.any { it is ActionUi.ForwardSms }
+        val hasLoud = actions.any { it is ActionUi.SetRingerLoud }
+        AddActionButton(
+            onAdd = onAdd,
+            forwardDisabled = hasForward,
+            loudDisabled = hasLoud
+        )
     }
 }
 
 @Composable
 private fun ActionRow(
-    index: Int,
     action: ActionUi,
     allRecipients: List<Recipient>,
     showLoudModePermissionHint: Boolean,
@@ -477,7 +505,7 @@ private fun ActionRow(
                         onToggleRecipient = onToggleRecipient,
                         onAddInlineRecipient = onAddInlineRecipient
                     )
-                    ActionUi.SetRingerLoud -> SetRingerLoudBody(
+                    is ActionUi.SetRingerLoud -> SetRingerLoudBody(
                         showPermissionHint = showLoudModePermissionHint,
                         onGrant = onGrantLoudMode
                     )
@@ -653,7 +681,11 @@ private fun PermissionHint(message: String, onGrant: () -> Unit) {
 }
 
 @Composable
-private fun AddActionButton(onAdd: (ActionKind) -> Unit) {
+private fun AddActionButton(
+    onAdd: (ActionKind) -> Unit,
+    forwardDisabled: Boolean,
+    loudDisabled: Boolean
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         OutlinedButton(onClick = { expanded = true }) {
@@ -662,6 +694,7 @@ private fun AddActionButton(onAdd: (ActionKind) -> Unit) {
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text("Forward the text to…") },
+                enabled = !forwardDisabled,
                 onClick = {
                     onAdd(ActionKind.FORWARD_SMS)
                     expanded = false
@@ -669,6 +702,7 @@ private fun AddActionButton(onAdd: (ActionKind) -> Unit) {
             )
             DropdownMenuItem(
                 text = { Text("Set the phone to loud mode") },
+                enabled = !loudDisabled,
                 onClick = {
                     onAdd(ActionKind.RINGER_LOUD)
                     expanded = false

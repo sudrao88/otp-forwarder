@@ -113,7 +113,7 @@ private fun MainNav() {
             composable(
                 route = Destinations.EDIT_RULE_ROUTE,
                 arguments = listOf(
-                    navArgument(Destinations.EDIT_RULE_ARG) { type = NavType.StringType }
+                    navArgument(Destinations.EDIT_RULE_ARG) { type = NavType.LongType }
                 )
             ) {
                 EditRuleScreen(onBack = { navController.popBackStack() })
@@ -132,7 +132,7 @@ private fun MainNav() {
             composable(
                 route = Destinations.EDIT_RECIPIENT_ROUTE,
                 arguments = listOf(
-                    navArgument(Destinations.EDIT_RECIPIENT_ARG) { type = NavType.StringType }
+                    navArgument(Destinations.EDIT_RECIPIENT_ARG) { type = NavType.LongType }
                 )
             ) {
                 EditRecipientScreen(

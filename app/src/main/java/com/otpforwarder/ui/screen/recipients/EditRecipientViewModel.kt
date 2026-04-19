@@ -26,8 +26,7 @@ class EditRecipientViewModel @Inject constructor(
     private val ruleRepository: ForwardingRuleRepository
 ) : ViewModel() {
 
-    private val editingId: Long = savedStateHandle.get<String>(Destinations.EDIT_RECIPIENT_ARG)
-        ?.toLongOrNull() ?: 0L
+    private val editingId: Long = savedStateHandle.get<Long>(Destinations.EDIT_RECIPIENT_ARG) ?: 0L
 
     private val _state = MutableStateFlow(EditRecipientUiState(isEditing = editingId != 0L))
     val state: StateFlow<EditRecipientUiState> = _state.asStateFlow()
