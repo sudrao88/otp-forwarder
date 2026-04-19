@@ -16,7 +16,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Periodically drops OTP log entries older than [WINDOW]. Scheduled from
- * [com.otpforwarder.OtpForwarderApp] at app start. Moving this out of
+ * [com.otpforwarder.OtpForwarderApplication] at app start. Moving this out of
  * `HomeViewModel.init` stops opening Home from destroying logs the user
  * might still want to see.
  */

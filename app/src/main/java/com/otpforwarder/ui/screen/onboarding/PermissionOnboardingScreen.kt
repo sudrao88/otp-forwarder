@@ -1,6 +1,9 @@
 package com.otpforwarder.ui.screen.onboarding
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,26 +22,48 @@ import androidx.compose.material.icons.filled.Sms
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import com.otpforwarder.util.PermissionHelper
 
 @Composable
 fun PermissionOnboardingScreen(
     onGranted: () -> Unit
 ) {
+    val context = LocalContext.current
     val permissions = remember { requiredPermissions() }
+    var showOpenSettings by remember { mutableStateOf(false) }
+
+    LifecycleResumeEffect(Unit) {
+        if (hasAllRequired(context, permissions)) {
+            onGranted()
+        }
+        onPauseOrDispose {}
+    }
+
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        val criticalGranted = results[Manifest.permission.RECEIVE_SMS] == true &&
-            results[Manifest.permission.SEND_SMS] == true
-        if (criticalGranted) onGranted()
+    ) { _ ->
+        if (hasAllRequired(context, permissions)) {
+            onGranted()
+        } else {
+            val activity = context as? Activity
+            showOpenSettings = activity == null ||
+                permissions.any { (perm, _) -> !activity.shouldShowRationale(perm) && !isGranted(context, perm) }
+        }
     }
 
     Box(
@@ -83,12 +108,30 @@ fun PermissionOnboardingScreen(
                     }
                 }
             }
+            if (showOpenSettings) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "Some permissions are blocked. Enable them in system settings to continue.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center
+                )
+            }
             Spacer(Modifier.weight(1f))
             Button(
                 onClick = { launcher.launch(permissions.map { it.first }.toTypedArray()) },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Grant Permissions")
+            }
+            if (showOpenSettings) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { PermissionHelper.openAppSettings(context) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Open Settings")
+                }
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -102,3 +145,12 @@ private fun requiredPermissions(): List<Pair<String, String>> = buildList {
         add(Manifest.permission.POST_NOTIFICATIONS to "Notifications")
     }
 }
+
+private fun isGranted(context: Context, permission: String): Boolean =
+    ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+private fun hasAllRequired(context: Context, permissions: List<Pair<String, String>>): Boolean =
+    permissions.all { (perm, _) -> isGranted(context, perm) }
+
+private fun Activity.shouldShowRationale(permission: String): Boolean =
+    androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(this, permission)

@@ -19,16 +19,23 @@ import javax.inject.Singleton
 /**
  * Centralises runtime permission logic for the OTP pipeline.
  *
- * The app needs three runtime permissions:
- *   - [Manifest.permission.RECEIVE_SMS] — to observe incoming SMS
- *   - [Manifest.permission.SEND_SMS] — to forward extracted OTPs
- *   - [Manifest.permission.POST_NOTIFICATIONS] — to surface results (API 33+)
+ * The app touches five permissions total:
+ *   - [Manifest.permission.RECEIVE_SMS] — runtime (SMS group), requested at onboarding
+ *   - [Manifest.permission.SEND_SMS] — runtime (SMS group), requested at onboarding
+ *   - [Manifest.permission.POST_NOTIFICATIONS] — runtime, requested at onboarding (API 33+)
+ *   - [Manifest.permission.CALL_PHONE] — runtime, requested per-rule when a PlaceCall action is added
+ *   - [Manifest.permission.ACCESS_NOTIFICATION_POLICY] — special access (system settings deep-link),
+ *     requested per-rule when a SetRingerLoud action is added
  */
 @Singleton
 class PermissionHelper @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
 
+    // Onboarding-gated set only. CALL_PHONE and ACCESS_NOTIFICATION_POLICY are requested
+    // per-rule from the rule editor: CALL_PHONE is a runtime permission scoped to the
+    // PlaceCall action, and ACCESS_NOTIFICATION_POLICY is a special-access setting that
+    // needs a system-settings deep-link, not a runtime prompt.
     /** Permissions the app actively requests, filtered for the running OS. */
     val requiredPermissions: Array<String>
         get() = buildList {
@@ -73,8 +80,21 @@ class PermissionHelper @Inject constructor(
 
     /** Opens the system Notification Policy access screen (special access). */
     fun openNotificationPolicySettings() {
-        val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+        // API 30+ exposes a per-app deep-link; the constant is @SystemApi, so the
+        // action string is used directly. Fall through to the list screen on older
+        // OSes, or if the detail screen can't be resolved on this device.
+        val detailIntent = Intent(ACTION_NOTIFICATION_POLICY_ACCESS_DETAIL_SETTINGS).apply {
+            data = Uri.fromParts("package", context.packageName, null)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        val canDeepLink = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            detailIntent.resolveActivity(context.packageManager) != null
+        val intent = if (canDeepLink) {
+            detailIntent
+        } else {
+            Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
         }
         context.startActivity(intent)
     }
@@ -91,5 +111,17 @@ class PermissionHelper @Inject constructor(
             ActivityResultContracts.RequestMultiplePermissions(),
             onResult
         )
+
+        /** Context-only variant used from composables that don't have an injected helper. */
+        fun openAppSettings(context: Context) {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        }
+
+        private const val ACTION_NOTIFICATION_POLICY_ACCESS_DETAIL_SETTINGS =
+            "android.settings.NOTIFICATION_POLICY_ACCESS_DETAIL_SETTINGS"
     }
 }

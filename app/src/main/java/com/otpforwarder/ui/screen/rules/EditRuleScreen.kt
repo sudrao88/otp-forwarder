@@ -52,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.otpforwarder.domain.model.Connector
 import com.otpforwarder.domain.model.OtpType
@@ -69,6 +70,11 @@ fun EditRuleScreen(
     val callPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ -> viewModel.refreshPermissionHints() }
+
+    LifecycleResumeEffect(Unit) {
+        viewModel.refreshPermissionHints()
+        onPauseOrDispose {}
+    }
 
     Scaffold(
         topBar = {
