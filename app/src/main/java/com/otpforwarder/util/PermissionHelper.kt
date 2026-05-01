@@ -96,6 +96,25 @@ class PermissionHelper @Inject constructor(
         context.startActivity(intent)
     }
 
+    /**
+     * Opens the system Full-Screen Intent access screen (Android 14+ special access).
+     * Falls back to the app's details settings on older OSes or unresolvable devices.
+     */
+    fun openFullScreenIntentSettings() {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+        }
+        context.startActivity(intent)
+    }
+
     /** Opens the system Notification Policy access screen (special access). */
     fun openNotificationPolicySettings() {
         // API 30+ exposes a per-app deep-link; the constant is @SystemApi, so the
