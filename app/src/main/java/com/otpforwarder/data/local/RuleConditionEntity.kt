@@ -31,5 +31,6 @@ data class RuleConditionEntity(
         const val TYPE_OTP_TYPE = "OTP_TYPE"
         const val TYPE_SENDER_REGEX = "SENDER_REGEX"
         const val TYPE_BODY_REGEX = "BODY_REGEX"
+        const val TYPE_MAPS_LINK = "MAPS_LINK"
     }
 }
