@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PersonSearch
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.AlertDialog
@@ -58,6 +60,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.otpforwarder.domain.model.Connector
 import com.otpforwarder.domain.model.OtpType
 import com.otpforwarder.domain.model.Recipient
+import com.otpforwarder.util.rememberContactPickerLauncher
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -729,6 +732,11 @@ private fun InlineAddRecipientSheet(
     var name by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
 
+    val pickContact = rememberContactPickerLauncher { picked ->
+        name = picked.name
+        phone = picked.phoneNumber
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
@@ -743,6 +751,19 @@ private fun InlineAddRecipientSheet(
                 text = "New Recipient",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
+            )
+            OutlinedButton(
+                onClick = pickContact,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.PersonSearch, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Pick from contacts")
+            }
+            Text(
+                text = "Or type a name and number below.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             OutlinedTextField(
                 value = name,
