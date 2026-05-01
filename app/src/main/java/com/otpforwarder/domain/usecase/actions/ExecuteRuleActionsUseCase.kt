@@ -1,6 +1,6 @@
 package com.otpforwarder.domain.usecase.actions
 
-import com.otpforwarder.domain.model.Otp
+import com.otpforwarder.domain.model.IncomingSms
 import com.otpforwarder.domain.model.Recipient
 import com.otpforwarder.domain.model.RuleAction
 import kotlinx.coroutines.Dispatchers
@@ -26,14 +26,14 @@ class ExecuteRuleActionsUseCase @Inject constructor(
 ) {
 
     suspend operator fun invoke(
-        otp: Otp,
+        sms: IncomingSms,
         actions: List<RuleAction>,
         recipientsById: Map<Long, Recipient>,
         alreadySentTo: MutableSet<Long>
     ): List<ActionOutcome> = withContext(Dispatchers.Default) {
         actions.map { action ->
             when (action) {
-                is RuleAction.ForwardSms -> forwardOutcome(action, otp, recipientsById, alreadySentTo)
+                is RuleAction.ForwardSms -> forwardOutcome(action, sms, recipientsById, alreadySentTo)
                 RuleAction.SetRingerLoud -> ringerOutcome()
                 is RuleAction.PlaceCall -> callOutcome(action, recipientsById)
             }
@@ -42,11 +42,11 @@ class ExecuteRuleActionsUseCase @Inject constructor(
 
     private fun forwardOutcome(
         action: RuleAction.ForwardSms,
-        otp: Otp,
+        sms: IncomingSms,
         recipientsById: Map<Long, Recipient>,
         alreadySentTo: MutableSet<Long>
     ): ActionOutcome {
-        val r = forwardSms(otp, action, recipientsById, alreadySentTo)
+        val r = forwardSms(sms, action, recipientsById, alreadySentTo)
         val attempted = r.sent + r.skipped
         val everyone = attempted + r.failed
         val sentNames = r.sent.map { it.name }

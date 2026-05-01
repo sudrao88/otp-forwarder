@@ -8,6 +8,7 @@ import com.otpforwarder.data.local.OtpLogDao
 import com.otpforwarder.data.local.RecipientDao
 import com.otpforwarder.data.local.migrations.MIGRATION_1_2
 import com.otpforwarder.data.local.migrations.MIGRATION_2_3
+import com.otpforwarder.data.local.migrations.MIGRATION_3_4
 import com.otpforwarder.data.repository.ForwardingRuleRepositoryImpl
 import com.otpforwarder.data.repository.OtpLogRepositoryImpl
 import com.otpforwarder.data.repository.RecipientRepositoryImpl
@@ -48,7 +49,7 @@ abstract class DatabaseModule {
                 AppDatabase::class.java,
                 "otp_forwarder_db"
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
 
         @Provides

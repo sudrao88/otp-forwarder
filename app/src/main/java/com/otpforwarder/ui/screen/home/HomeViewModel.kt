@@ -84,7 +84,6 @@ class HomeViewModel @Inject constructor(
                     when (result) {
                         is ProcessIncomingSmsUseCase.Result.Forwarded -> RetryEvent.Succeeded
                         is ProcessIncomingSmsUseCase.Result.NoMatchingRule -> RetryEvent.NoMatch
-                        ProcessIncomingSmsUseCase.Result.NotOtp -> RetryEvent.NoMatch
                     }
                 },
                 onFailure = { RetryEvent.Failed }

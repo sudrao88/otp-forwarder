@@ -3,6 +3,7 @@ package com.otpforwarder.domain.engine
 import com.otpforwarder.domain.model.ClassifierTier
 import com.otpforwarder.domain.model.Connector
 import com.otpforwarder.domain.model.ForwardingRule
+import com.otpforwarder.domain.model.IncomingSms
 import com.otpforwarder.domain.model.Otp
 import com.otpforwarder.domain.model.OtpType
 import com.otpforwarder.domain.model.RuleAction
@@ -34,6 +35,23 @@ class RuleEngineTest {
         detectedAt = Instant.parse("2026-04-18T00:00:00Z"),
         confidence = 0.95,
         classifierTier = ClassifierTier.KEYWORD
+    )
+
+    private fun smsOf(otp: Otp): IncomingSms = IncomingSms(
+        sender = otp.sender,
+        body = otp.originalMessage,
+        otp = otp,
+        receivedAt = otp.detectedAt
+    )
+
+    private fun nonOtpSms(
+        sender: String = "MOM",
+        body: String = "Where are you?"
+    ): IncomingSms = IncomingSms(
+        sender = sender,
+        body = body,
+        otp = null,
+        receivedAt = Instant.parse("2026-04-18T00:00:00Z")
     )
 
     private fun rule(
@@ -68,8 +86,13 @@ class RuleEngineTest {
     private fun evaluate(
         rules: List<ForwardingRule>,
         otp: Otp = otp()
+    ): List<ForwardingRule> = evaluate(rules, smsOf(otp))
+
+    private fun evaluate(
+        rules: List<ForwardingRule>,
+        sms: IncomingSms
     ): List<ForwardingRule> = runBlocking {
-        RuleEngine(FakeRuleRepo(rules)).evaluate(otp)
+        RuleEngine(FakeRuleRepo(rules)).evaluate(sms)
     }
 
     private fun otpType(type: OtpType, connector: Connector = Connector.AND) =
@@ -291,6 +314,43 @@ class RuleEngineTest {
             )
         )
         assertEquals(1, evaluate(listOf(r)).size)
+    }
+
+    @Test
+    fun `non-OTP SMS still evaluated — OtpTypeIs ALL matches a body with no detected code`() {
+        val r = rule(1, listOf(otpType(OtpType.ALL)))
+        val sms = nonOtpSms(sender = "MOM", body = "Where are you?")
+        assertEquals(1, evaluate(listOf(r), sms).size)
+    }
+
+    @Test
+    fun `non-OTP SMS — OtpTypeIs non-ALL does not match`() {
+        OtpType.entries.filter { it != OtpType.ALL }.forEach { declared ->
+            val r = rule(1, listOf(otpType(declared)))
+            assertTrue(
+                "$declared should not match a non-OTP SMS",
+                evaluate(listOf(r), nonOtpSms()).isEmpty()
+            )
+        }
+    }
+
+    @Test
+    fun `non-OTP SMS — SenderMatches still fires on the raw sender`() {
+        val r = rule(1, listOf(sender("MOM")))
+        assertEquals(1, evaluate(listOf(r), nonOtpSms(sender = "MOM", body = "hey")).size)
+        assertTrue(evaluate(listOf(r), nonOtpSms(sender = "DAD", body = "hey")).isEmpty())
+    }
+
+    @Test
+    fun `non-OTP SMS — BodyContains still fires on the raw body`() {
+        val r = rule(1, listOf(body("urgent")))
+        assertEquals(
+            1,
+            evaluate(listOf(r), nonOtpSms(sender = "X", body = "this is urgent")).size
+        )
+        assertTrue(
+            evaluate(listOf(r), nonOtpSms(sender = "X", body = "nothing here")).isEmpty()
+        )
     }
 
     @Test

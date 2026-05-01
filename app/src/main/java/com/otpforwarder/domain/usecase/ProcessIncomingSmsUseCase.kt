@@ -1,10 +1,10 @@
 package com.otpforwarder.domain.usecase
 
-import com.otpforwarder.domain.model.OtpLogEntry
 import com.otpforwarder.domain.classification.OtpClassifier
 import com.otpforwarder.domain.detection.OtpDetector
 import com.otpforwarder.domain.engine.RuleEngine
-import com.otpforwarder.domain.model.Otp
+import com.otpforwarder.domain.model.IncomingSms
+import com.otpforwarder.domain.model.OtpLogEntry
 import com.otpforwarder.domain.repository.OtpLogRepository
 import com.otpforwarder.domain.repository.RecipientRepository
 import com.otpforwarder.domain.usecase.actions.ExecuteRuleActionsUseCase
@@ -15,13 +15,13 @@ import javax.inject.Singleton
 
 /**
  * Orchestrates a single inbound SMS through the full pipeline:
- *   detect → classify (tiered) → match rules → dispatch actions → log.
+ *   detect (optional) → classify (only when detected) → match rules → dispatch actions → log.
  *
- * Non-OTP messages short-circuit and produce no log entry. OTPs that match no
- * rule are likewise not logged (nothing was forwarded). Every matching rule
- * produces its own log entry so the user can see which rules fired; forward
- * sends are deduped across rules via a shared `alreadySentTo` set so one
- * recipient never receives the same OTP twice.
+ * Rules are evaluated against every SMS, OTP or not, so sender / body keyword
+ * rules can fire on plain texts. Messages that match no rule produce no log
+ * entry. Every matching rule produces its own log entry; forward sends are
+ * deduped across rules via a shared `alreadySentTo` set so one recipient never
+ * receives the same message twice.
  */
 @Singleton
 class ProcessIncomingSmsUseCase @Inject constructor(
@@ -35,19 +35,24 @@ class ProcessIncomingSmsUseCase @Inject constructor(
 ) {
 
     suspend operator fun invoke(sender: String, body: String): Result {
-        val detected = detector.detect(sender, body) ?: return Result.NotOtp
-        val (type, tier) = classifier.classify(sender, body)
-        val otp = detected.copy(type = type, classifierTier = tier)
+        val now = Instant.now(clock)
+        val detected = detector.detect(sender, body)
+        val otp = if (detected != null) {
+            val (type, tier) = classifier.classify(sender, body)
+            detected.copy(type = type, classifierTier = tier)
+        } else {
+            null
+        }
+        val sms = IncomingSms(sender = sender, body = body, otp = otp, receivedAt = now)
 
-        val matchingRules = ruleEngine.evaluate(otp)
-        if (matchingRules.isEmpty()) return Result.NoMatchingRule(otp)
+        val matchingRules = ruleEngine.evaluate(sms)
+        if (matchingRules.isEmpty()) return Result.NoMatchingRule(sms)
 
         val recipientsById = recipientRepository.getActiveRecipients().associateBy { it.id }
-        val now = Instant.now(clock)
         val alreadySentTo = mutableSetOf<Long>()
         val forwardedRecipients = linkedSetOf<String>()
         for (rule in matchingRules) {
-            val outcomes = executeRuleActions(otp, rule.actions, recipientsById, alreadySentTo)
+            val outcomes = executeRuleActions(sms, rule.actions, recipientsById, alreadySentTo)
             outcomes.forEach { outcome ->
                 if (outcome.status == ExecuteRuleActionsUseCase.ActionOutcome.Status.SUCCESS) {
                     forwardedRecipients += outcome.forwardedRecipientNames
@@ -65,13 +70,13 @@ class ProcessIncomingSmsUseCase @Inject constructor(
             otpLogRepository.insertLog(
                 OtpLogEntry(
                     id = 0,
-                    code = otp.code,
-                    otpType = otp.type,
-                    sender = otp.sender,
-                    originalMessage = otp.originalMessage,
-                    detectedAt = otp.detectedAt,
-                    confidence = otp.confidence,
-                    classifierTier = otp.classifierTier,
+                    code = otp?.code,
+                    otpType = otp?.type,
+                    sender = sender,
+                    originalMessage = body,
+                    detectedAt = otp?.detectedAt ?: now,
+                    confidence = otp?.confidence,
+                    classifierTier = otp?.classifierTier,
                     ruleName = rule.name,
                     summaryLines = outcomes.map { it.summary },
                     status = status,
@@ -79,23 +84,20 @@ class ProcessIncomingSmsUseCase @Inject constructor(
                 )
             )
         }
-        return Result.Forwarded(otp, matchingRules.size, forwardedRecipients.toList())
+        return Result.Forwarded(sms, matchingRules.size, forwardedRecipients.toList())
     }
 
     sealed interface Result {
-        /** SMS did not contain an OTP. */
-        data object NotOtp : Result
-
-        /** OTP detected but no forwarding rule matched. */
-        data class NoMatchingRule(val otp: Otp) : Result
+        /** No forwarding rule matched the SMS. */
+        data class NoMatchingRule(val sms: IncomingSms) : Result
 
         /**
-         * OTP detected and at least one rule matched. [recipients] lists the
-         * recipient names that actually received the SMS (empty if every
-         * matching rule fired only non-forward actions, e.g. ring loud / call).
+         * At least one rule matched. [recipients] lists the recipient names
+         * that actually received the forwarded SMS (empty if every matching
+         * rule fired only non-forward actions, e.g. ring loud / call).
          */
         data class Forwarded(
-            val otp: Otp,
+            val sms: IncomingSms,
             val ruleCount: Int,
             val recipients: List<String>
         ) : Result

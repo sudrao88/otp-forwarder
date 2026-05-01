@@ -3,14 +3,14 @@ package com.otpforwarder.domain.model
 sealed interface RuleCondition {
     val connector: Connector
 
-    fun matches(otp: Otp): Boolean
+    fun matches(sms: IncomingSms): Boolean
 
     data class OtpTypeIs(
         val type: OtpType,
         override val connector: Connector
     ) : RuleCondition {
-        override fun matches(otp: Otp): Boolean =
-            type == OtpType.ALL || type == otp.type
+        override fun matches(sms: IncomingSms): Boolean =
+            type == OtpType.ALL || sms.otp?.type == type
     }
 
     data class SenderMatches(
@@ -18,8 +18,8 @@ sealed interface RuleCondition {
         override val connector: Connector
     ) : RuleCondition {
         private val compiled: Regex? = runCatching { Regex(pattern) }.getOrNull()
-        override fun matches(otp: Otp): Boolean =
-            compiled?.containsMatchIn(otp.sender) ?: false
+        override fun matches(sms: IncomingSms): Boolean =
+            compiled?.containsMatchIn(sms.sender) ?: false
     }
 
     data class BodyContains(
@@ -27,7 +27,7 @@ sealed interface RuleCondition {
         override val connector: Connector
     ) : RuleCondition {
         private val compiled: Regex? = runCatching { Regex(pattern) }.getOrNull()
-        override fun matches(otp: Otp): Boolean =
-            compiled?.containsMatchIn(otp.originalMessage) ?: false
+        override fun matches(sms: IncomingSms): Boolean =
+            compiled?.containsMatchIn(sms.body) ?: false
     }
 }

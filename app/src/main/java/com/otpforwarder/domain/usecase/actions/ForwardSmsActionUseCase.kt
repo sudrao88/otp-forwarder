@@ -1,6 +1,6 @@
 package com.otpforwarder.domain.usecase.actions
 
-import com.otpforwarder.domain.model.Otp
+import com.otpforwarder.domain.model.IncomingSms
 import com.otpforwarder.domain.model.Recipient
 import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.sms.SmsSender
@@ -8,7 +8,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Forwards the OTP's original message to the recipients of a [RuleAction.ForwardSms].
+ * Forwards the incoming SMS body to the recipients of a [RuleAction.ForwardSms].
  *
  * Deduplication runs across every rule and action fired for a single incoming
  * SMS via the shared [alreadySentTo] set: once a recipient has been attempted
@@ -18,7 +18,7 @@ import javax.inject.Singleton
  */
 fun interface ForwardSmsAction {
     operator fun invoke(
-        otp: Otp,
+        sms: IncomingSms,
         action: RuleAction.ForwardSms,
         recipientsById: Map<Long, Recipient>,
         alreadySentTo: MutableSet<Long>
@@ -37,7 +37,7 @@ class ForwardSmsActionUseCase @Inject constructor(
 ) : ForwardSmsAction {
 
     override fun invoke(
-        otp: Otp,
+        sms: IncomingSms,
         action: RuleAction.ForwardSms,
         recipientsById: Map<Long, Recipient>,
         alreadySentTo: MutableSet<Long>
@@ -51,7 +51,7 @@ class ForwardSmsActionUseCase @Inject constructor(
                 skipped += recipient
                 return@forEach
             }
-            val ok = smsSender.send(recipient.phoneNumber, otp.originalMessage)
+            val ok = smsSender.send(recipient.phoneNumber, sms.body)
             if (ok) sent += recipient else failed += recipient
         }
         return ForwardSmsResult(sent, skipped, failed)

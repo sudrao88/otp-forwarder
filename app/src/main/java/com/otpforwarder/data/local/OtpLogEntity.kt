@@ -12,13 +12,13 @@ import java.time.Instant
 data class OtpLogEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val code: String,
-    val otpType: String,
+    val code: String?,
+    val otpType: String?,
     val sender: String,
     val originalMessage: String,
     val detectedAt: Instant,
-    val confidence: Double,
-    val classifierTier: String,
+    val confidence: Double?,
+    val classifierTier: String?,
     val ruleName: String,
     val recipientNames: String,
     val status: String,

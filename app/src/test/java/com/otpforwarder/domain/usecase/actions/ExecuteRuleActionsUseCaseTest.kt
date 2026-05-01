@@ -1,6 +1,7 @@
 package com.otpforwarder.domain.usecase.actions
 
 import com.otpforwarder.domain.model.ClassifierTier
+import com.otpforwarder.domain.model.IncomingSms
 import com.otpforwarder.domain.model.Otp
 import com.otpforwarder.domain.model.OtpType
 import com.otpforwarder.domain.model.Recipient
@@ -35,6 +36,13 @@ class ExecuteRuleActionsUseCaseTest {
         detectedAt = Instant.parse("2026-04-19T00:00:00Z"),
         confidence = 0.95,
         classifierTier = ClassifierTier.KEYWORD
+    )
+
+    private val sms = IncomingSms(
+        sender = otp.sender,
+        body = otp.originalMessage,
+        otp = otp,
+        receivedAt = otp.detectedAt
     )
 
     private class FakeSmsSender(
@@ -84,9 +92,10 @@ class ExecuteRuleActionsUseCaseTest {
         sender: SmsSender = FakeSmsSender(),
         ringer: SetRingerLoudAction = FakeRingerLoud(SetRingerLoudResult(true, true)),
         call: PlaceCallAction = FakePlaceCall(),
-        alreadySentTo: MutableSet<Long> = mutableSetOf()
+        alreadySentTo: MutableSet<Long> = mutableSetOf(),
+        sms: IncomingSms = this.sms
     ) = runBlocking {
-        dispatcher(sender, ringer, call)(otp, actions, recipientsById, alreadySentTo)
+        dispatcher(sender, ringer, call)(sms, actions, recipientsById, alreadySentTo)
     }
 
     @Test
