@@ -406,6 +406,10 @@ private fun toActionUi(a: RuleAction, uid: Long): ActionUi = when (a) {
     is RuleAction.ForwardSms -> ActionUi.ForwardSms(actionUid = uid, recipientIds = a.recipientIds.toSet())
     RuleAction.SetRingerLoud -> ActionUi.SetRingerLoud(actionUid = uid)
     is RuleAction.PlaceCall -> ActionUi.PlaceCall(actionUid = uid, recipientId = a.recipientId)
+    // OpenMapsNavigation has no editor UI yet — Phase 5 wires it up. No code path
+    // creates this action before then, so reaching this branch means the DB was
+    // populated out-of-band.
+    is RuleAction.OpenMapsNavigation -> error("OpenMapsNavigation editor UI is added in Phase 5")
 }
 
 private fun toDomainAction(a: ActionUi): RuleAction = when (a) {

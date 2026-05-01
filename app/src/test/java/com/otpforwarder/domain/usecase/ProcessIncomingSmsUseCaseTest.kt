@@ -17,6 +17,9 @@ import com.otpforwarder.domain.repository.OtpLogRepository
 import com.otpforwarder.domain.repository.RecipientRepository
 import com.otpforwarder.domain.usecase.actions.ExecuteRuleActionsUseCase
 import com.otpforwarder.domain.usecase.actions.ForwardSmsActionUseCase
+import com.otpforwarder.domain.usecase.actions.OpenMapsAction
+import com.otpforwarder.domain.usecase.actions.OpenMapsResult
+import com.otpforwarder.domain.model.IncomingSms
 import com.otpforwarder.domain.usecase.actions.PlaceCallAction
 import com.otpforwarder.domain.usecase.actions.PlaceCallResult
 import com.otpforwarder.domain.usecase.actions.SetRingerLoudAction
@@ -112,6 +115,11 @@ class ProcessIncomingSmsUseCaseTest {
             error("PlaceCall must not run for ringer-only rule")
     }
 
+    private object UnusedOpenMaps : OpenMapsAction {
+        override fun invoke(sms: IncomingSms): OpenMapsResult =
+            error("OpenMaps must not run for non-maps rule")
+    }
+
     @Test
     fun `non-OTP SMS that matches a SenderMatches rule still fires SetRingerLoud`() {
         val ringer = CountingRinger(SetRingerLoudResult(ringerChanged = true, bypassedDnd = true))
@@ -134,7 +142,8 @@ class ProcessIncomingSmsUseCaseTest {
             executeRuleActions = ExecuteRuleActionsUseCase(
                 forwardSms = ForwardSmsActionUseCase(UnusedSmsSender),
                 setRingerLoud = ringer,
-                placeCall = UnusedPlaceCall
+                placeCall = UnusedPlaceCall,
+                openMaps = UnusedOpenMaps
             ),
             recipientRepository = FakeRecipientRepo(),
             otpLogRepository = logRepo,
@@ -188,7 +197,8 @@ class ProcessIncomingSmsUseCaseTest {
             executeRuleActions = ExecuteRuleActionsUseCase(
                 forwardSms = ForwardSmsActionUseCase(UnusedSmsSender),
                 setRingerLoud = ringer,
-                placeCall = UnusedPlaceCall
+                placeCall = UnusedPlaceCall,
+                openMaps = UnusedOpenMaps
             ),
             recipientRepository = FakeRecipientRepo(),
             otpLogRepository = logRepo,
@@ -216,7 +226,8 @@ class ProcessIncomingSmsUseCaseTest {
             executeRuleActions = ExecuteRuleActionsUseCase(
                 forwardSms = ForwardSmsActionUseCase(UnusedSmsSender),
                 setRingerLoud = CountingRinger(SetRingerLoudResult(true, true)),
-                placeCall = UnusedPlaceCall
+                placeCall = UnusedPlaceCall,
+                openMaps = UnusedOpenMaps
             ),
             recipientRepository = FakeRecipientRepo(),
             otpLogRepository = logRepo,

@@ -5,9 +5,13 @@ import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -21,11 +25,13 @@ import javax.inject.Singleton
  * Owns the app's notification channels and builds notifications shown by the
  * SMS processing pipeline.
  *
- * Two channels:
+ * Three channels:
  *  - [CHANNEL_PROCESSING] — low-importance, used for the foreground service
  *    notification that surfaces briefly while an OTP is being processed.
  *  - [CHANNEL_RESULTS] — default importance, used for forwarding outcome
  *    notifications (sent / failed / retrying).
+ *  - [CHANNEL_MAPS] — high importance with heads-up alert, used for the
+ *    Maps-link rule action so the navigate prompt surfaces while driving.
  */
 @Singleton
 class NotificationHelper @Inject constructor(
@@ -102,6 +108,60 @@ class NotificationHelper @Inject constructor(
         )
     }
 
+    /**
+     * Posts a high-importance notification whose tap fires an `ACTION_VIEW`
+     * intent on [mapsUrl], preferring the Google Maps app and falling back to
+     * a chooser when it isn't installed. Returns `true` when posting
+     * succeeded — `false` is reserved for the missing POST_NOTIFICATIONS path
+     * so callers can report a faithful action outcome.
+     */
+    @SuppressLint("MissingPermission")
+    fun notifyMapsNavigation(sender: String, mapsUrl: String): Boolean {
+        if (!hasPostNotificationsPermission()) return false
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            mapsUrl.hashCode(),
+            buildMapsViewIntent(mapsUrl),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val title = context.getString(R.string.notification_maps_title, sender)
+        val text = context.getString(R.string.notification_maps_text)
+        val notification = NotificationCompat.Builder(context, CHANNEL_MAPS)
+            .setSmallIcon(R.drawable.ic_notification_small)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+        return runCatching {
+            NotificationManagerCompat.from(context)
+                .notify(NotificationIds.forMaps(sender, mapsUrl), notification)
+        }.onFailure { Log.w(TAG, "Failed to post Maps navigation notification", it) }.isSuccess
+    }
+
+    /**
+     * Builds the View intent that the notification fires on tap. We prefer the
+     * official Google Maps package; if it isn't installed [resolveActivity]
+     * returns null and we fall back to a chooser so any browser/maps handler
+     * can serve the URL.
+     */
+    private fun buildMapsViewIntent(mapsUrl: String): Intent {
+        val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(mapsUrl)).apply {
+            setPackage(MAPS_PACKAGE)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val mapsInstalled = viewIntent.resolveActivity(context.packageManager) != null
+        if (mapsInstalled) return viewIntent
+        val chooser = Intent(Intent.ACTION_VIEW, Uri.parse(mapsUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return Intent.createChooser(chooser, null).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+
     @SuppressLint("MissingPermission")
     private fun notify(id: Int, title: String, text: String, smallIcon: Int) {
         if (!hasPostNotificationsPermission()) return
@@ -144,13 +204,24 @@ class NotificationHelper @Inject constructor(
             description = context.getString(R.string.notification_channel_results_desc)
         }
 
-        manager.createNotificationChannels(listOf(processing, results))
+        val maps = NotificationChannel(
+            CHANNEL_MAPS,
+            context.getString(R.string.notification_channel_maps_name),
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = context.getString(R.string.notification_channel_maps_desc)
+        }
+
+        manager.createNotificationChannels(listOf(processing, results, maps))
     }
 
     companion object {
         const val CHANNEL_PROCESSING = "otp_processing"
         const val CHANNEL_RESULTS = "otp_results"
+        const val CHANNEL_MAPS = "maps_navigation"
         const val PROCESSING_NOTIFICATION_ID = 1001
+        private const val MAPS_PACKAGE = "com.google.android.apps.maps"
+        private const val TAG = "NotificationHelper"
     }
 }
 
@@ -162,4 +233,7 @@ object NotificationIds {
 
     fun forRetry(sender: String, body: String): Int =
         (sender + body.hashCode()).hashCode()
+
+    fun forMaps(sender: String, mapsUrl: String): Int =
+        ("maps:" + sender + mapsUrl).hashCode()
 }
