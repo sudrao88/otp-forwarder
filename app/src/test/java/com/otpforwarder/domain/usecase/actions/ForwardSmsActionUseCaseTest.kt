@@ -1,6 +1,7 @@
 package com.otpforwarder.domain.usecase.actions
 
 import com.otpforwarder.domain.model.ClassifierTier
+import com.otpforwarder.domain.model.IncomingSms
 import com.otpforwarder.domain.model.Otp
 import com.otpforwarder.domain.model.OtpType
 import com.otpforwarder.domain.model.Recipient
@@ -27,6 +28,13 @@ class ForwardSmsActionUseCaseTest {
         classifierTier = ClassifierTier.KEYWORD
     )
 
+    private val sms = IncomingSms(
+        sender = otp.sender,
+        body = otp.originalMessage,
+        otp = otp,
+        receivedAt = otp.detectedAt
+    )
+
     private class FakeSmsSender(val failFor: Set<String> = emptySet()) : SmsSender {
         val sent = mutableListOf<Pair<String, String>>()
         override fun send(phoneNumber: String, message: String): Boolean {
@@ -40,7 +48,7 @@ class ForwardSmsActionUseCaseTest {
         val sender = FakeSmsSender()
         val useCase = ForwardSmsActionUseCase(sender)
         val result = useCase(
-            otp,
+            sms,
             RuleAction.ForwardSms(listOf(mom.id, dad.id)),
             recipientsById,
             mutableSetOf()
@@ -56,7 +64,7 @@ class ForwardSmsActionUseCaseTest {
         val sender = FakeSmsSender()
         val useCase = ForwardSmsActionUseCase(sender)
         val result = useCase(
-            otp,
+            sms,
             RuleAction.ForwardSms(listOf(mom.id, mom.id, mom.id)),
             recipientsById,
             mutableSetOf()
@@ -72,7 +80,7 @@ class ForwardSmsActionUseCaseTest {
         val shared = mutableSetOf<Long>()
 
         val first = useCase(
-            otp,
+            sms,
             RuleAction.ForwardSms(listOf(mom.id, dad.id)),
             recipientsById,
             shared
@@ -81,7 +89,7 @@ class ForwardSmsActionUseCaseTest {
         assertEquals(setOf(mom.id, dad.id), shared)
 
         val second = useCase(
-            otp,
+            sms,
             RuleAction.ForwardSms(listOf(mom.id, dad.id)),
             recipientsById,
             shared
@@ -96,7 +104,7 @@ class ForwardSmsActionUseCaseTest {
         val sender = FakeSmsSender()
         val useCase = ForwardSmsActionUseCase(sender)
         val result = useCase(
-            otp,
+            sms,
             RuleAction.ForwardSms(listOf(mom.id, 999L, dad.id)),
             recipientsById,
             mutableSetOf()
@@ -112,7 +120,7 @@ class ForwardSmsActionUseCaseTest {
         val useCase = ForwardSmsActionUseCase(sender)
         val shared = mutableSetOf<Long>()
         val result = useCase(
-            otp,
+            sms,
             RuleAction.ForwardSms(listOf(mom.id, dad.id)),
             recipientsById,
             shared
@@ -128,7 +136,7 @@ class ForwardSmsActionUseCaseTest {
         val sender = FakeSmsSender()
         val useCase = ForwardSmsActionUseCase(sender)
         val result = useCase(
-            otp,
+            sms,
             RuleAction.ForwardSms(emptyList()),
             recipientsById,
             mutableSetOf()

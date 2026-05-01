@@ -175,13 +175,15 @@ private fun OtpLogCard(
                 )
             }
             Spacer(Modifier.height(6.dp))
+            if (entry.code != null) {
+                Text(
+                    text = "Code: ${entry.code}",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Spacer(Modifier.height(2.dp))
+            }
             Text(
-                text = "Code: ${entry.code}",
-                style = MaterialTheme.typography.bodyLarge
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = "${entry.otpType.name} → ${entry.summaryLines.joinToString(", ")}",
+                text = "${entry.otpType?.name ?: "Non-OTP"} → ${entry.summaryLines.joinToString(", ")}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

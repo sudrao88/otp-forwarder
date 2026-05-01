@@ -68,13 +68,12 @@ class OtpProcessingService : Service() {
                 when (result) {
                     is ProcessIncomingSmsUseCase.Result.Forwarded -> {
                         notificationHelper.notifyForwarded(
-                            otp = result.otp,
+                            sms = result.sms,
                             recipientNames = result.recipients,
                             ruleCount = result.ruleCount
                         )
                     }
-                    is ProcessIncomingSmsUseCase.Result.NoMatchingRule,
-                    ProcessIncomingSmsUseCase.Result.NotOtp -> Unit
+                    is ProcessIncomingSmsUseCase.Result.NoMatchingRule -> Unit
                 }
             } catch (t: Throwable) {
                 Log.e(TAG, "Pipeline failed; scheduling retry", t)

@@ -12,7 +12,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.otpforwarder.R
-import com.otpforwarder.domain.model.Otp
+import com.otpforwarder.domain.model.IncomingSms
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -52,42 +52,35 @@ class NotificationHelper @Inject constructor(
             .build()
 
     /**
-     * Notifies the user that an OTP was processed.
+     * Notifies the user that an SMS was processed.
      *
      * [recipientNames] is the list of recipients that actually received the
      * forwarded SMS. If it is empty (every matching rule fired only non-forward
      * actions, e.g. ring loud / call), the notification falls back to the rule
      * count so the text still reflects what happened.
+     *
+     * The body line includes the OTP code+type when one was detected. Plain
+     * (non-OTP) SMS that triggered a rule simply name the sender.
      */
-    fun notifyForwarded(otp: Otp, recipientNames: List<String>, ruleCount: Int) {
+    fun notifyForwarded(sms: IncomingSms, recipientNames: List<String>, ruleCount: Int) {
         val target = if (recipientNames.isNotEmpty()) {
             recipientNames.joinToString(", ")
         } else {
             "$ruleCount rule(s)"
         }
         val text = buildString {
-            append(otp.type.name).append(" · ")
-            append(otp.code).append(" → ")
+            val otp = sms.otp
+            if (otp != null) {
+                append(otp.type.name).append(" · ")
+                append(otp.code).append(" → ")
+            } else {
+                append(sms.sender).append(" → ")
+            }
             append(target)
         }
         notify(
-            id = NotificationIds.forOtp(otp),
+            id = NotificationIds.forSms(sms),
             title = context.getString(R.string.notification_forwarded_title),
-            text = text,
-            smallIcon = R.drawable.ic_notification_small
-        )
-    }
-
-    /** Notifies the user that forwarding failed. */
-    fun notifyFailed(otp: Otp, recipientNames: List<String>) {
-        val text = buildString {
-            append(otp.type.name).append(" · ")
-            append(otp.code).append(" → ")
-            append(recipientNames.joinToString(", "))
-        }
-        notify(
-            id = NotificationIds.forOtp(otp),
-            title = context.getString(R.string.notification_failed_title),
             text = text,
             smallIcon = R.drawable.ic_notification_small
         )
@@ -162,8 +155,10 @@ class NotificationHelper @Inject constructor(
 }
 
 object NotificationIds {
-    fun forOtp(otp: Otp): Int =
-        (otp.sender + otp.code + otp.detectedAt.toEpochMilli()).hashCode()
+    fun forSms(sms: IncomingSms): Int {
+        val payload = sms.otp?.code ?: sms.body
+        return (sms.sender + payload + sms.receivedAt.toEpochMilli()).hashCode()
+    }
 
     fun forRetry(sender: String, body: String): Int =
         (sender + body.hashCode()).hashCode()

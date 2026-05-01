@@ -38,8 +38,7 @@ class RetryWorker @AssistedInject constructor(
         return try {
             when (processIncomingSms(sender, body)) {
                 is ProcessIncomingSmsUseCase.Result.Forwarded,
-                is ProcessIncomingSmsUseCase.Result.NoMatchingRule,
-                ProcessIncomingSmsUseCase.Result.NotOtp -> Result.success()
+                is ProcessIncomingSmsUseCase.Result.NoMatchingRule -> Result.success()
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Retry attempt ${runAttemptCount + 1} failed", t)
