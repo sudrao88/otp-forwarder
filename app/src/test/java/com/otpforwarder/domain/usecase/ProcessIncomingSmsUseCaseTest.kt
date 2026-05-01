@@ -116,7 +116,7 @@ class ProcessIncomingSmsUseCaseTest {
     }
 
     private object UnusedOpenMaps : OpenMapsAction {
-        override fun invoke(sms: IncomingSms): OpenMapsResult =
+        override fun invoke(sms: IncomingSms, autoLaunch: Boolean): OpenMapsResult =
             error("OpenMaps must not run for non-maps rule")
     }
 

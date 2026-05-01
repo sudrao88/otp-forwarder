@@ -112,7 +112,7 @@ class ExecuteRuleActionsUseCase @Inject constructor(
         action: RuleAction.OpenMapsNavigation,
         sms: IncomingSms
     ): ActionOutcome {
-        val r = openMaps(sms)
+        val r = openMaps(sms, action.autoLaunch)
         return when {
             r.skipped -> ActionOutcome(action, ActionOutcome.Status.SKIPPED, "No Maps link found")
             r.success -> ActionOutcome(action, ActionOutcome.Status.SUCCESS, "Opened Google Maps")
