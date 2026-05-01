@@ -7,12 +7,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PersonSearch
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -20,6 +22,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -34,6 +37,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.otpforwarder.util.rememberContactPickerLauncher
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,6 +47,11 @@ fun EditRecipientScreen(
     viewModel: EditRecipientViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    val pickContact = rememberContactPickerLauncher { picked ->
+        viewModel.setName(picked.name)
+        viewModel.setPhone(picked.phoneNumber)
+    }
 
     Scaffold(
         topBar = {
@@ -74,6 +83,21 @@ fun EditRecipientScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Spacer(Modifier.height(4.dp))
+
+            OutlinedButton(
+                onClick = pickContact,
+                enabled = !state.inFlight,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.PersonSearch, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Pick from contacts")
+            }
+            Text(
+                text = "Or type the name and number below.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             OutlinedTextField(
                 value = state.name,
