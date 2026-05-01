@@ -91,6 +91,9 @@ dependencies {
     // WorkManager
     implementation(libs.workmanager)
 
+    // ML Kit GenAI — on-device Gemini Nano via Android AICore
+    implementation(libs.mlkit.genai.prompt)
+
     // Testing
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

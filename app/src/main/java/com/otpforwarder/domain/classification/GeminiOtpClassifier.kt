@@ -3,19 +3,20 @@ package com.otpforwarder.domain.classification
 import com.otpforwarder.domain.model.ClassifierTier
 import com.otpforwarder.domain.model.OtpType
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * On-device classification backed by Google AI Edge SDK's `GenerativeModel` (Gemini Nano).
+ * On-device classification backed by Android AICore (ML Kit GenAI Prompt API).
  *
- * The Gemini SDK is **not currently on the project classpath**, so the default
- * [GeminiRuntime] binding ([DisabledGeminiRuntime]) reports unavailable and the
- * [TieredOtpClassifier] always falls back to the keyword classifier in shipped
- * builds. To enable the Gemini tier, add the `com.google.ai.edge:generative-ai`
- * artifact to `app/build.gradle.kts`, provide a real runtime that wraps
- * `GenerativeModel`, and rebind [GeminiRuntime] in `DomainModule`.
+ * The runtime is supplied via [GeminiRuntime]; in production this is
+ * [com.otpforwarder.data.gemini.AiCoreGeminiRuntime] (wraps `Generation.getClient()`).
+ * Tests can swap in a fake runtime — including [DisabledGeminiRuntime], which always
+ * reports unsupported and is the safe fallback when AICore isn't on the device.
  *
  * Any unchecked throwable from the runtime is converted to `UNKNOWN` so the
  * tiered orchestrator falls back transparently. `CancellationException` is
@@ -76,21 +77,40 @@ class GeminiOtpClassifier @Inject constructor(
 }
 
 /**
- * Indirection over the Google AI Edge `GenerativeModel` so it can be stubbed in tests
- * and so the classifier still compiles / runs without the SDK on the classpath.
+ * On-device Gemini Nano availability, mirroring AICore `FeatureStatus`.
  */
-interface GeminiRuntime {
-    suspend fun isAvailable(): Boolean
-    suspend fun generate(prompt: String): String
+enum class GeminiAvailability {
+    Unknown,
+    Unsupported,
+    Downloadable,
+    Downloading,
+    Ready
 }
 
 /**
- * Default binding used until the Gemini SDK is added to the project classpath.
- * Reports unavailable; [generate] is never called because [isAvailable] gates it.
+ * Indirection over the AICore `GenerativeModel` so it can be stubbed in tests
+ * and so the classifier compiles without a hard dependency on the SDK.
+ */
+interface GeminiRuntime {
+    val downloadProgress: StateFlow<Float?>
+    suspend fun status(): GeminiAvailability
+    suspend fun isAvailable(): Boolean = status() == GeminiAvailability.Ready
+    suspend fun generate(prompt: String): String
+    suspend fun startDownload()
+}
+
+/**
+ * Test/fallback runtime that reports the device as unsupported.
+ * [generate] is never called because [isAvailable] gates it.
  */
 @Singleton
 class DisabledGeminiRuntime @Inject constructor() : GeminiRuntime {
-    override suspend fun isAvailable(): Boolean = false
+    private val _progress = MutableStateFlow<Float?>(null)
+    override val downloadProgress: StateFlow<Float?> = _progress.asStateFlow()
+    override suspend fun status(): GeminiAvailability = GeminiAvailability.Unsupported
     override suspend fun generate(prompt: String): String =
         throw UnsupportedOperationException("Gemini runtime is disabled")
+    override suspend fun startDownload() {
+        // no-op — nothing to download on an unsupported device
+    }
 }

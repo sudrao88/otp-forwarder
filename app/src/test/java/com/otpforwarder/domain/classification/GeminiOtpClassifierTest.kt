@@ -7,6 +7,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -24,12 +27,16 @@ class GeminiOtpClassifierTest {
         var generateCalls = 0
             private set
 
+        override val downloadProgress: StateFlow<Float?> = MutableStateFlow(null).asStateFlow()
+        override suspend fun status(): GeminiAvailability =
+            if (available) GeminiAvailability.Ready else GeminiAvailability.Unsupported
         override suspend fun isAvailable(): Boolean = available
         override suspend fun generate(prompt: String): String {
             generateCalls++
             error?.let { throw it }
             return response
         }
+        override suspend fun startDownload() = Unit
     }
 
     @Test
@@ -111,11 +118,15 @@ class GeminiOtpClassifierTest {
     fun `cancellation propagates through classify`() = runBlocking {
         val started = CompletableDeferred<Unit>()
         val runtime = object : GeminiRuntime {
+            override val downloadProgress: StateFlow<Float?> =
+                MutableStateFlow(null).asStateFlow()
+            override suspend fun status(): GeminiAvailability = GeminiAvailability.Ready
             override suspend fun isAvailable(): Boolean = true
             override suspend fun generate(prompt: String): String {
                 started.complete(Unit)
                 awaitCancellation()
             }
+            override suspend fun startDownload() = Unit
         }
         val classifier = GeminiOtpClassifier(runtime)
 

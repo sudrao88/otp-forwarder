@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -92,10 +94,23 @@ fun SettingsScreen(
             SectionTitle("Classification")
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    val activeTier = if (state.gemini.isReady) "Gemini Nano" else "Keyword Scoring"
+                    val activeTier = if (state.isGeminiReady) "Gemini Nano" else "Keyword Scoring"
                     KeyValueRow("Active", activeTier)
                     Spacer(Modifier.height(4.dp))
-                    KeyValueRow("Gemini Nano", state.gemini.label)
+                    KeyValueRow("Gemini Nano", state.gemini.label(state.downloadProgress))
+                    state.downloadProgress?.let { progress ->
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    if (state.canDownloadGemini) {
+                        Spacer(Modifier.height(12.dp))
+                        Button(onClick = viewModel::downloadGemini) {
+                            Text("Download model")
+                        }
+                    }
                 }
             }
 

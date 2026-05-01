@@ -16,6 +16,7 @@ junit = "4.13.2"
 kotlinx-coroutines-test = "1.9.0"
 androidx-test-runner = "1.6.2"
 androidx-test-ext-junit = "1.2.1"
+mlkit-genai-prompt = "1.0.0-beta2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
@@ -50,6 +51,9 @@ room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 
 # WorkManager
 workmanager = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workmanager" }
+
+# ML Kit GenAI (on-device Gemini Nano via AICore)
+mlkit-genai-prompt = { group = "com.google.mlkit", name = "genai-prompt", version.ref = "mlkit-genai-prompt" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }
