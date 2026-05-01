@@ -86,6 +86,7 @@ class EditRuleViewModel @Inject constructor(
             ConditionKind.OTP_TYPE -> ConditionUi.OtpTypeIs(OtpType.ALL, Connector.AND)
             ConditionKind.SENDER -> ConditionUi.SenderMatches("", Connector.AND)
             ConditionKind.BODY -> ConditionUi.BodyContains("", Connector.AND)
+            ConditionKind.MAPS_LINK -> ConditionUi.ContainsMapsLink(Connector.AND)
         }
         s.copy(conditions = s.conditions + new, generalError = null)
     }
@@ -103,6 +104,7 @@ class EditRuleViewModel @Inject constructor(
             is ConditionUi.SenderMatches -> c.copy(pattern = pattern, error = null)
             is ConditionUi.BodyContains -> c.copy(pattern = pattern, error = null)
             is ConditionUi.OtpTypeIs -> c
+            is ConditionUi.ContainsMapsLink -> c
         }
         s.copy(conditions = list, generalError = null)
     }
@@ -131,6 +133,7 @@ class EditRuleViewModel @Inject constructor(
             ActionKind.FORWARD_SMS -> ActionUi.ForwardSms(actionUid = nextActionUid(), recipientIds = emptySet())
             ActionKind.RINGER_LOUD -> ActionUi.SetRingerLoud(actionUid = nextActionUid())
             ActionKind.PLACE_CALL -> ActionUi.PlaceCall(actionUid = nextActionUid(), recipientId = null)
+            ActionKind.OPEN_MAPS -> ActionUi.OpenMaps(actionUid = nextActionUid(), autoLaunch = false)
         }
         s.copy(
             actions = s.actions + new,
@@ -162,6 +165,19 @@ class EditRuleViewModel @Inject constructor(
         s.copy(actions = list)
     }
 
+    fun setActionAutoLaunch(actionUid: Long, autoLaunch: Boolean) = _state.update { s ->
+        val index = s.actions.indexOfFirst { it.actionUid == actionUid }
+        if (index < 0) return@update s
+        val list = s.actions.toMutableList()
+        val a = list[index] as? ActionUi.OpenMaps ?: return@update s
+        list[index] = a.copy(autoLaunch = autoLaunch)
+        s.copy(
+            actions = list,
+            showFullScreenIntentPermissionHint = list.any { it is ActionUi.OpenMaps && it.autoLaunch } &&
+                !permissionHelper.hasFullScreenIntent()
+        )
+    }
+
     fun removeAction(actionUid: Long) = _state.update { s ->
         val index = s.actions.indexOfFirst { it.actionUid == actionUid }
         if (index < 0) return@update s
@@ -172,6 +188,8 @@ class EditRuleViewModel @Inject constructor(
                 !permissionHelper.hasNotificationPolicyAccess(),
             showCallPermissionHint = list.any { it is ActionUi.PlaceCall } &&
                 !permissionHelper.hasCallPhone(),
+            showFullScreenIntentPermissionHint = list.any { it is ActionUi.OpenMaps && it.autoLaunch } &&
+                !permissionHelper.hasFullScreenIntent(),
             generalError = null
         )
     }
@@ -181,11 +199,15 @@ class EditRuleViewModel @Inject constructor(
             showLoudModePermissionHint = s.actions.any { it is ActionUi.SetRingerLoud } &&
                 !permissionHelper.hasNotificationPolicyAccess(),
             showCallPermissionHint = s.actions.any { it is ActionUi.PlaceCall } &&
-                !permissionHelper.hasCallPhone()
+                !permissionHelper.hasCallPhone(),
+            showFullScreenIntentPermissionHint = s.actions.any { it is ActionUi.OpenMaps && it.autoLaunch } &&
+                !permissionHelper.hasFullScreenIntent()
         )
     }
 
     fun openNotificationPolicySettings() = permissionHelper.openNotificationPolicySettings()
+
+    fun openFullScreenIntentSettings() = permissionHelper.openFullScreenIntentSettings()
 
     fun addInlineRecipient(name: String, phone: String, onDone: (Long) -> Unit) {
         val trimmedName = name.trim()
@@ -276,6 +298,7 @@ class EditRuleViewModel @Inject constructor(
         is ConditionUi.OtpTypeIs -> c
         is ConditionUi.SenderMatches -> c.copy(error = validatePattern(c.pattern))
         is ConditionUi.BodyContains -> c.copy(error = validatePattern(c.pattern))
+        is ConditionUi.ContainsMapsLink -> c
     }
 
     private fun validateAction(a: ActionUi): ActionUi = when (a) {
@@ -284,6 +307,7 @@ class EditRuleViewModel @Inject constructor(
         is ActionUi.PlaceCall ->
             if (a.recipientId == null) a.copy(error = "Choose a recipient") else a.copy(error = null)
         is ActionUi.SetRingerLoud -> a
+        is ActionUi.OpenMaps -> a
     }
 
     private fun validatePattern(pattern: String): String? {
@@ -304,12 +328,14 @@ class EditRuleViewModel @Inject constructor(
         is ConditionUi.OtpTypeIs -> false
         is ConditionUi.SenderMatches -> c.error != null
         is ConditionUi.BodyContains -> c.error != null
+        is ConditionUi.ContainsMapsLink -> false
     }
 
     private fun actionHasError(a: ActionUi): Boolean = when (a) {
         is ActionUi.ForwardSms -> a.error != null
         is ActionUi.PlaceCall -> a.error != null
         is ActionUi.SetRingerLoud -> false
+        is ActionUi.OpenMaps -> false
     }
 
     data class EditRuleUiState(
@@ -322,19 +348,34 @@ class EditRuleViewModel @Inject constructor(
         val allRecipients: List<Recipient> = emptyList(),
         val showLoudModePermissionHint: Boolean = false,
         val showCallPermissionHint: Boolean = false,
+        val showFullScreenIntentPermissionHint: Boolean = false,
         val generalError: String? = null,
         val inFlight: Boolean = false,
         val showDeleteConfirm: Boolean = false
-    )
+    ) {
+        /**
+         * Soft warnings shown alongside the form — they do not block save.
+         * Currently: warn if `OpenMapsNavigation` is used without a `ContainsMapsLink`
+         * condition, since the action would skip on every non-Maps SMS.
+         */
+        val softWarning: String?
+            get() {
+                val hasOpenMaps = actions.any { it is ActionUi.OpenMaps }
+                val hasMapsCondition = conditions.any { it is ConditionUi.ContainsMapsLink }
+                return if (hasOpenMaps && !hasMapsCondition) {
+                    "Tip: add a \"Contains Google Maps link\" condition — without it, this action will skip on messages that have no Maps link."
+                } else null
+            }
+    }
 
     companion object {
         const val DEFAULT_PRIORITY = 10
     }
 }
 
-enum class ConditionKind { OTP_TYPE, SENDER, BODY }
+enum class ConditionKind { OTP_TYPE, SENDER, BODY, MAPS_LINK }
 
-enum class ActionKind { FORWARD_SMS, RINGER_LOUD, PLACE_CALL }
+enum class ActionKind { FORWARD_SMS, RINGER_LOUD, PLACE_CALL, OPEN_MAPS }
 
 sealed interface ConditionUi {
     val connector: Connector
@@ -354,6 +395,10 @@ sealed interface ConditionUi {
         val pattern: String,
         override val connector: Connector,
         val error: String? = null
+    ) : ConditionUi
+
+    data class ContainsMapsLink(
+        override val connector: Connector
     ) : ConditionUi
 }
 
@@ -375,12 +420,18 @@ sealed interface ActionUi {
         val recipientId: Long?,
         val error: String? = null
     ) : ActionUi
+
+    data class OpenMaps(
+        override val actionUid: Long,
+        val autoLaunch: Boolean
+    ) : ActionUi
 }
 
 private fun withConnector(c: ConditionUi, connector: Connector): ConditionUi = when (c) {
     is ConditionUi.OtpTypeIs -> c.copy(connector = connector)
     is ConditionUi.SenderMatches -> c.copy(connector = connector)
     is ConditionUi.BodyContains -> c.copy(connector = connector)
+    is ConditionUi.ContainsMapsLink -> c.copy(connector = connector)
 }
 
 private fun toConditionUi(c: RuleCondition): ConditionUi = when (c) {
@@ -390,32 +441,28 @@ private fun toConditionUi(c: RuleCondition): ConditionUi = when (c) {
     }
     is RuleCondition.SenderMatches -> ConditionUi.SenderMatches(c.pattern, c.connector)
     is RuleCondition.BodyContains -> ConditionUi.BodyContains(c.pattern, c.connector)
-    // ContainsMapsLink has no editor UI yet — Phase 5 wires it up. No code path
-    // creates this condition before then, so reaching this branch means the DB
-    // was populated out-of-band.
-    is RuleCondition.ContainsMapsLink -> error("ContainsMapsLink editor UI is added in Phase 5")
+    is RuleCondition.ContainsMapsLink -> ConditionUi.ContainsMapsLink(c.connector)
 }
 
 private fun toDomainCondition(c: ConditionUi): RuleCondition = when (c) {
     is ConditionUi.OtpTypeIs -> RuleCondition.OtpTypeIs(c.type, c.connector)
     is ConditionUi.SenderMatches -> RuleCondition.SenderMatches(c.pattern, c.connector)
     is ConditionUi.BodyContains -> RuleCondition.BodyContains(c.pattern, c.connector)
+    is ConditionUi.ContainsMapsLink -> RuleCondition.ContainsMapsLink(c.connector)
 }
 
 private fun toActionUi(a: RuleAction, uid: Long): ActionUi = when (a) {
     is RuleAction.ForwardSms -> ActionUi.ForwardSms(actionUid = uid, recipientIds = a.recipientIds.toSet())
     RuleAction.SetRingerLoud -> ActionUi.SetRingerLoud(actionUid = uid)
     is RuleAction.PlaceCall -> ActionUi.PlaceCall(actionUid = uid, recipientId = a.recipientId)
-    // OpenMapsNavigation has no editor UI yet — Phase 5 wires it up. No code path
-    // creates this action before then, so reaching this branch means the DB was
-    // populated out-of-band.
-    is RuleAction.OpenMapsNavigation -> error("OpenMapsNavigation editor UI is added in Phase 5")
+    is RuleAction.OpenMapsNavigation -> ActionUi.OpenMaps(actionUid = uid, autoLaunch = a.autoLaunch)
 }
 
 private fun toDomainAction(a: ActionUi): RuleAction = when (a) {
     is ActionUi.ForwardSms -> RuleAction.ForwardSms(a.recipientIds.toList())
     is ActionUi.SetRingerLoud -> RuleAction.SetRingerLoud
     is ActionUi.PlaceCall -> RuleAction.PlaceCall(requireNotNull(a.recipientId))
+    is ActionUi.OpenMaps -> RuleAction.OpenMapsNavigation(autoLaunch = a.autoLaunch)
 }
 
 private suspend fun RecipientRepository.getAllRecipientsSnapshot(): List<Recipient> =

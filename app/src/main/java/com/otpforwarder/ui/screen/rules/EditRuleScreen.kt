@@ -40,6 +40,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -135,13 +136,16 @@ fun EditRuleScreen(
                 allRecipients = state.allRecipients,
                 showLoudModePermissionHint = state.showLoudModePermissionHint,
                 showCallPermissionHint = state.showCallPermissionHint,
+                showFullScreenIntentPermissionHint = state.showFullScreenIntentPermissionHint,
                 onAdd = viewModel::addAction,
                 onRemove = viewModel::removeAction,
                 onToggleRecipient = viewModel::toggleActionRecipient,
                 onCallRecipientChange = viewModel::setCallRecipient,
                 onAddInlineRecipient = { uid -> addRecipientTargetActionUid = uid },
+                onSetAutoLaunch = viewModel::setActionAutoLaunch,
                 onGrantLoudMode = viewModel::openNotificationPolicySettings,
-                onGrantCallPhone = { callPermissionLauncher.launch(Manifest.permission.CALL_PHONE) }
+                onGrantCallPhone = { callPermissionLauncher.launch(Manifest.permission.CALL_PHONE) },
+                onGrantFullScreenIntent = viewModel::openFullScreenIntentSettings
             )
 
             OutlinedTextField(
@@ -159,6 +163,14 @@ fun EditRuleScreen(
                     text = msg,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            state.softWarning?.let { msg ->
+                Text(
+                    text = msg,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    style = MaterialTheme.typography.bodySmall
                 )
             }
 
@@ -244,7 +256,10 @@ private fun ConditionsSection(
             )
         }
 
-        AddConditionButton(onAdd = onAdd)
+        AddConditionButton(
+            onAdd = onAdd,
+            mapsLinkDisabled = conditions.any { it is ConditionUi.ContainsMapsLink }
+        )
     }
 }
 
@@ -307,12 +322,30 @@ private fun ConditionRow(
                         error = condition.error,
                         onChange = onPatternChange
                     )
+                    is ConditionUi.ContainsMapsLink -> ContainsMapsLinkConditionBody()
                 }
             }
             IconButton(onClick = onRemove) {
                 Icon(Icons.Default.Close, contentDescription = "Remove condition")
             }
         }
+    }
+}
+
+@Composable
+private fun ContainsMapsLinkConditionBody() {
+    Column {
+        Text(
+            text = "Contains a Google Maps link",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            text = "Matches messages containing a maps.google.com, google.com/maps, goo.gl/maps, or maps.app.goo.gl link.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }
 
@@ -400,7 +433,10 @@ private fun PatternConditionBody(
 }
 
 @Composable
-private fun AddConditionButton(onAdd: (ConditionKind) -> Unit) {
+private fun AddConditionButton(
+    onAdd: (ConditionKind) -> Unit,
+    mapsLinkDisabled: Boolean
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         OutlinedButton(onClick = { expanded = true }) {
@@ -428,6 +464,14 @@ private fun AddConditionButton(onAdd: (ConditionKind) -> Unit) {
                     expanded = false
                 }
             )
+            DropdownMenuItem(
+                text = { Text("Contains Google Maps link") },
+                enabled = !mapsLinkDisabled,
+                onClick = {
+                    onAdd(ConditionKind.MAPS_LINK)
+                    expanded = false
+                }
+            )
         }
     }
 }
@@ -438,13 +482,16 @@ private fun ActionsSection(
     allRecipients: List<Recipient>,
     showLoudModePermissionHint: Boolean,
     showCallPermissionHint: Boolean,
+    showFullScreenIntentPermissionHint: Boolean,
     onAdd: (ActionKind) -> Unit,
     onRemove: (Long) -> Unit,
     onToggleRecipient: (Long, Long) -> Unit,
     onCallRecipientChange: (Long, Long) -> Unit,
     onAddInlineRecipient: (Long) -> Unit,
+    onSetAutoLaunch: (Long, Boolean) -> Unit,
     onGrantLoudMode: () -> Unit,
-    onGrantCallPhone: () -> Unit
+    onGrantCallPhone: () -> Unit,
+    onGrantFullScreenIntent: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -459,20 +506,25 @@ private fun ActionsSection(
                 allRecipients = allRecipients,
                 showLoudModePermissionHint = showLoudModePermissionHint,
                 showCallPermissionHint = showCallPermissionHint,
+                showFullScreenIntentPermissionHint = showFullScreenIntentPermissionHint,
                 onRemove = { onRemove(uid) },
                 onToggleRecipient = { onToggleRecipient(uid, it) },
                 onCallRecipientChange = { onCallRecipientChange(uid, it) },
                 onAddInlineRecipient = { onAddInlineRecipient(uid) },
+                onSetAutoLaunch = { onSetAutoLaunch(uid, it) },
                 onGrantLoudMode = onGrantLoudMode,
-                onGrantCallPhone = onGrantCallPhone
+                onGrantCallPhone = onGrantCallPhone,
+                onGrantFullScreenIntent = onGrantFullScreenIntent
             )
         }
         val hasForward = actions.any { it is ActionUi.ForwardSms }
         val hasLoud = actions.any { it is ActionUi.SetRingerLoud }
+        val hasOpenMaps = actions.any { it is ActionUi.OpenMaps }
         AddActionButton(
             onAdd = onAdd,
             forwardDisabled = hasForward,
-            loudDisabled = hasLoud
+            loudDisabled = hasLoud,
+            openMapsDisabled = hasOpenMaps
         )
     }
 }
@@ -483,12 +535,15 @@ private fun ActionRow(
     allRecipients: List<Recipient>,
     showLoudModePermissionHint: Boolean,
     showCallPermissionHint: Boolean,
+    showFullScreenIntentPermissionHint: Boolean,
     onRemove: () -> Unit,
     onToggleRecipient: (Long) -> Unit,
     onCallRecipientChange: (Long) -> Unit,
     onAddInlineRecipient: () -> Unit,
+    onSetAutoLaunch: (Boolean) -> Unit,
     onGrantLoudMode: () -> Unit,
-    onGrantCallPhone: () -> Unit
+    onGrantCallPhone: () -> Unit,
+    onGrantFullScreenIntent: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -520,11 +575,67 @@ private fun ActionRow(
                         onAddInlineRecipient = onAddInlineRecipient,
                         onGrant = onGrantCallPhone
                     )
+                    is ActionUi.OpenMaps -> OpenMapsBody(
+                        action = action,
+                        showFullScreenIntentPermissionHint = showFullScreenIntentPermissionHint,
+                        onSetAutoLaunch = onSetAutoLaunch,
+                        onGrantFullScreenIntent = onGrantFullScreenIntent
+                    )
                 }
             }
             IconButton(onClick = onRemove) {
                 Icon(Icons.Default.Close, contentDescription = "Remove action")
             }
+        }
+    }
+}
+
+@Composable
+private fun OpenMapsBody(
+    action: ActionUi.OpenMaps,
+    showFullScreenIntentPermissionHint: Boolean,
+    onSetAutoLaunch: (Boolean) -> Unit,
+    onGrantFullScreenIntent: () -> Unit
+) {
+    Column {
+        Text(
+            text = "Open Google Maps navigation",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            text = "Posts a notification with the Maps link from the SMS — tap to start navigation.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Auto-launch (driving)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "Opens Maps immediately using a full-screen notification, even when the screen is off.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = action.autoLaunch,
+                onCheckedChange = onSetAutoLaunch
+            )
+        }
+        if (action.autoLaunch && showFullScreenIntentPermissionHint) {
+            Spacer(Modifier.height(8.dp))
+            PermissionHint(
+                message = "Grant the \"Display over other apps / full-screen notifications\" permission so Maps can launch automatically. Without it, the rule falls back to a tap-to-open notification.",
+                onGrant = onGrantFullScreenIntent
+            )
         }
     }
 }
@@ -687,7 +798,8 @@ private fun PermissionHint(message: String, onGrant: () -> Unit) {
 private fun AddActionButton(
     onAdd: (ActionKind) -> Unit,
     forwardDisabled: Boolean,
-    loudDisabled: Boolean
+    loudDisabled: Boolean,
+    openMapsDisabled: Boolean
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -715,6 +827,14 @@ private fun AddActionButton(
                 text = { Text("Place a call to…") },
                 onClick = {
                     onAdd(ActionKind.PLACE_CALL)
+                    expanded = false
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Open Google Maps navigation") },
+                enabled = !openMapsDisabled,
+                onClick = {
+                    onAdd(ActionKind.OPEN_MAPS)
                     expanded = false
                 }
             )
