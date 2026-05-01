@@ -111,12 +111,22 @@ class NotificationHelper @Inject constructor(
     /**
      * Posts a high-importance notification whose tap fires an `ACTION_VIEW`
      * intent on [mapsUrl], preferring the Google Maps app and falling back to
-     * a chooser when it isn't installed. Returns `true` when posting
-     * succeeded — `false` is reserved for the missing POST_NOTIFICATIONS path
-     * so callers can report a faithful action outcome.
+     * a chooser when it isn't installed.
+     *
+     * When [autoLaunch] is `true` the same PendingIntent is also attached as a
+     * full-screen intent so Android can launch Maps without user interaction
+     * while the device is locked / screen-off. The OS silently demotes the
+     * FSI to a heads-up notification if the device is in use, or if the user
+     * has revoked the `USE_FULL_SCREEN_INTENT` grant on Android 14+ — in both
+     * cases the tap path remains the working fallback, which is why this
+     * method does not need to model the demotion explicitly.
+     *
+     * Returns `true` when posting succeeded — `false` is reserved for the
+     * missing POST_NOTIFICATIONS path so callers can report a faithful action
+     * outcome.
      */
     @SuppressLint("MissingPermission")
-    fun notifyMapsNavigation(sender: String, mapsUrl: String): Boolean {
+    fun notifyMapsNavigation(sender: String, mapsUrl: String, autoLaunch: Boolean): Boolean {
         if (!hasPostNotificationsPermission()) return false
         val pendingIntent = PendingIntent.getActivity(
             context,
@@ -126,7 +136,7 @@ class NotificationHelper @Inject constructor(
         )
         val title = context.getString(R.string.notification_maps_title, sender)
         val text = context.getString(R.string.notification_maps_text)
-        val notification = NotificationCompat.Builder(context, CHANNEL_MAPS)
+        val builder = NotificationCompat.Builder(context, CHANNEL_MAPS)
             .setSmallIcon(R.drawable.ic_notification_small)
             .setContentTitle(title)
             .setContentText(text)
@@ -134,10 +144,12 @@ class NotificationHelper @Inject constructor(
             .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .build()
+        if (autoLaunch) {
+            builder.setFullScreenIntent(pendingIntent, true)
+        }
         return runCatching {
             NotificationManagerCompat.from(context)
-                .notify(NotificationIds.forMaps(sender, mapsUrl), notification)
+                .notify(NotificationIds.forMaps(sender, mapsUrl), builder.build())
         }.onFailure { Log.w(TAG, "Failed to post Maps navigation notification", it) }.isSuccess
     }
 

@@ -14,12 +14,15 @@ import javax.inject.Singleton
  * configured on a rule that also matches non-Maps SMS via other conditions —
  * skipping gracefully avoids surprising the user with an empty notification).
  *
- * Phase 3 ignores [com.otpforwarder.domain.model.RuleAction.OpenMapsNavigation.autoLaunch]:
- * the notification path is the only UX wired here. Phase 4 attaches a
- * full-screen intent when the flag is on.
+ * [com.otpforwarder.domain.model.RuleAction.OpenMapsNavigation.autoLaunch] is
+ * forwarded to the notifier: when `true`, the notification carries a
+ * full-screen intent so Android can launch Maps directly while the screen is
+ * off / locked. The OS silently demotes the FSI to a heads-up notification
+ * when the device is in use or when the user has revoked the FSI grant on
+ * Android 14+, so callers do not need to model the fallback themselves.
  */
 fun interface OpenMapsAction {
-    operator fun invoke(sms: IncomingSms): OpenMapsResult
+    operator fun invoke(sms: IncomingSms, autoLaunch: Boolean): OpenMapsResult
 }
 
 data class OpenMapsResult(
@@ -35,10 +38,10 @@ class OpenMapsActionUseCase @Inject constructor(
     private val mapsNotifier: MapsNotifier
 ) : OpenMapsAction {
 
-    override fun invoke(sms: IncomingSms): OpenMapsResult {
+    override fun invoke(sms: IncomingSms, autoLaunch: Boolean): OpenMapsResult {
         val url = MapsLinkDetector.findMapsLink(sms.body)
             ?: return OpenMapsResult(mapsUrl = null, posted = false)
-        val posted = mapsNotifier.notifyNavigation(sms.sender, url)
+        val posted = mapsNotifier.notifyNavigation(sms.sender, url, autoLaunch)
         return OpenMapsResult(mapsUrl = url, posted = posted)
     }
 }

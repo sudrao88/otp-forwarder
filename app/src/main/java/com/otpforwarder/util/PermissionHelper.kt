@@ -19,13 +19,16 @@ import javax.inject.Singleton
 /**
  * Centralises runtime permission logic for the OTP pipeline.
  *
- * The app touches five permissions total:
+ * The app touches six permissions total:
  *   - [Manifest.permission.RECEIVE_SMS] — runtime (SMS group), requested at onboarding
  *   - [Manifest.permission.SEND_SMS] — runtime (SMS group), requested at onboarding
  *   - [Manifest.permission.POST_NOTIFICATIONS] — runtime, requested at onboarding (API 33+)
  *   - [Manifest.permission.CALL_PHONE] — runtime, requested per-rule when a PlaceCall action is added
  *   - [Manifest.permission.ACCESS_NOTIFICATION_POLICY] — special access (system settings deep-link),
  *     requested per-rule when a SetRingerLoud action is added
+ *   - [Manifest.permission.USE_FULL_SCREEN_INTENT] — install-time grant pre-Android 14; on
+ *     Android 14+ it becomes special access, queried via [hasFullScreenIntent] so the rule
+ *     editor can hint when auto-launch is toggled on but the OS will downgrade it.
  */
 @Singleton
 class PermissionHelper @Inject constructor(
@@ -64,6 +67,21 @@ class PermissionHelper @Inject constructor(
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             ?: return false
         return nm.isNotificationPolicyAccessGranted
+    }
+
+    /**
+     * `true` when the OS will honour a notification's full-screen intent.
+     *
+     * Pre-Android 14 the manifest declaration is sufficient. On 14+ the user
+     * may revoke the grant from system settings, in which case the OS demotes
+     * FSI notifications to ordinary heads-up. The rule editor uses this to
+     * surface a hint when auto-launch is enabled but the OS would silently
+     * fall back to the tap UX.
+     */
+    fun hasFullScreenIntent(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
+        val nm = context.getSystemService(NotificationManager::class.java) ?: return false
+        return nm.canUseFullScreenIntent()
     }
 
     /** `true` only when every permission required for the pipeline is granted. */

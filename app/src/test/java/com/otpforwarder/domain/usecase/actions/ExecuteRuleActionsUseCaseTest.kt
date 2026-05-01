@@ -81,8 +81,10 @@ class ExecuteRuleActionsUseCaseTest {
         private val result: OpenMapsResult = OpenMapsResult(mapsUrl = null, posted = false)
     ) : OpenMapsAction {
         var calls: Int = 0
-        override fun invoke(sms: IncomingSms): OpenMapsResult {
+        var lastAutoLaunch: Boolean? = null
+        override fun invoke(sms: IncomingSms, autoLaunch: Boolean): OpenMapsResult {
             calls++
+            lastAutoLaunch = autoLaunch
             return result
         }
     }
@@ -306,5 +308,20 @@ class ExecuteRuleActionsUseCaseTest {
             "expected skipped summary, got: ${outcomes[0].summary}",
             outcomes[0].summary.contains("No Maps link", ignoreCase = true)
         )
+    }
+
+    @Test
+    fun `OpenMapsNavigation forwards the per-rule autoLaunch flag to the action`() {
+        val maps = FakeOpenMaps(
+            OpenMapsResult(mapsUrl = "https://maps.google.com/?q=1,2", posted = true)
+        )
+        run(actions = listOf(RuleAction.OpenMapsNavigation(autoLaunch = true)), maps = maps)
+        assertEquals(true, maps.lastAutoLaunch)
+
+        val mapsOff = FakeOpenMaps(
+            OpenMapsResult(mapsUrl = "https://maps.google.com/?q=1,2", posted = true)
+        )
+        run(actions = listOf(RuleAction.OpenMapsNavigation(autoLaunch = false)), maps = mapsOff)
+        assertEquals(false, mapsOff.lastAutoLaunch)
     }
 }
