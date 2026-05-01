@@ -7,6 +7,12 @@
     <string name="notification_channel_processing_desc">Shown briefly while an incoming OTP is being processed.</string>
     <string name="notification_channel_results_name">Forwarding Results</string>
     <string name="notification_channel_results_desc">Notifications about forwarded or failed OTPs.</string>
+    <string name="notification_channel_maps_name">Maps Navigation</string>
+    <string name="notification_channel_maps_desc">High-priority notifications that open Google Maps for inbound location SMS.</string>
+
+    <!-- Maps navigation notification -->
+    <string name="notification_maps_title">Navigate to %1$s\'s location</string>
+    <string name="notification_maps_text">Tap to open in Google Maps</string>
 
     <!-- Processing notification -->
     <string name="notification_processing_title">Processing incoming SMS</string>

@@ -83,6 +83,8 @@ private fun describeAction(a: RuleAction, recipientsById: Map<Long, Recipient>):
         val name = recipientsById[a.recipientId]?.name
         if (name == null) "Places a call" else "Calls $name"
     }
+    // Phase 5 will surface auto-launch state in the description.
+    is RuleAction.OpenMapsNavigation -> "Opens Google Maps"
 }
 
 private fun shortOtpTypeLabel(type: OtpType): String = when (type) {

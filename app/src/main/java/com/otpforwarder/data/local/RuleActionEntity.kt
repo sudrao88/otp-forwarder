@@ -29,11 +29,13 @@ data class RuleActionEntity(
     val ruleId: Long,
     val orderIndex: Int,
     val actionType: String,
-    val callRecipientId: Long? = null
+    val callRecipientId: Long? = null,
+    val mapsAutoLaunch: Boolean = false
 ) {
     companion object {
         const val TYPE_FORWARD_SMS = "FORWARD_SMS"
         const val TYPE_RINGER_LOUD = "RINGER_LOUD"
         const val TYPE_PLACE_CALL = "PLACE_CALL"
+        const val TYPE_OPEN_MAPS = "OPEN_MAPS"
     }
 }

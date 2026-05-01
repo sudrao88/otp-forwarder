@@ -77,14 +77,26 @@ class ExecuteRuleActionsUseCaseTest {
         }
     }
 
+    private class FakeOpenMaps(
+        private val result: OpenMapsResult = OpenMapsResult(mapsUrl = null, posted = false)
+    ) : OpenMapsAction {
+        var calls: Int = 0
+        override fun invoke(sms: IncomingSms): OpenMapsResult {
+            calls++
+            return result
+        }
+    }
+
     private fun dispatcher(
         sender: SmsSender = FakeSmsSender(),
         ringer: SetRingerLoudAction = FakeRingerLoud(SetRingerLoudResult(true, true)),
-        call: PlaceCallAction = FakePlaceCall()
+        call: PlaceCallAction = FakePlaceCall(),
+        maps: OpenMapsAction = FakeOpenMaps()
     ) = ExecuteRuleActionsUseCase(
         forwardSms = ForwardSmsActionUseCase(sender),
         setRingerLoud = ringer,
-        placeCall = call
+        placeCall = call,
+        openMaps = maps
     )
 
     private fun run(
@@ -92,10 +104,11 @@ class ExecuteRuleActionsUseCaseTest {
         sender: SmsSender = FakeSmsSender(),
         ringer: SetRingerLoudAction = FakeRingerLoud(SetRingerLoudResult(true, true)),
         call: PlaceCallAction = FakePlaceCall(),
+        maps: OpenMapsAction = FakeOpenMaps(),
         alreadySentTo: MutableSet<Long> = mutableSetOf(),
         sms: IncomingSms = this.sms
     ) = runBlocking {
-        dispatcher(sender, ringer, call)(sms, actions, recipientsById, alreadySentTo)
+        dispatcher(sender, ringer, call, maps)(sms, actions, recipientsById, alreadySentTo)
     }
 
     @Test
@@ -267,6 +280,31 @@ class ExecuteRuleActionsUseCaseTest {
         assertTrue(
             "expected DND mention in summary, got: ${outcomes[0].summary}",
             outcomes[0].summary.contains("DND", ignoreCase = true)
+        )
+    }
+
+    @Test
+    fun `OpenMapsNavigation success — outcome reports SUCCESS with friendly summary`() {
+        val maps = FakeOpenMaps(
+            OpenMapsResult(mapsUrl = "https://maps.google.com/?q=1,2", posted = true)
+        )
+        val outcomes = run(actions = listOf(RuleAction.OpenMapsNavigation()), maps = maps)
+        assertEquals(1, outcomes.size)
+        assertEquals(Status.SUCCESS, outcomes[0].status)
+        assertTrue(outcomes[0].success)
+        assertEquals("Opened Google Maps", outcomes[0].summary)
+        assertEquals(1, maps.calls)
+    }
+
+    @Test
+    fun `OpenMapsNavigation skips when no Maps link is found in body`() {
+        val maps = FakeOpenMaps(OpenMapsResult(mapsUrl = null, posted = false))
+        val outcomes = run(actions = listOf(RuleAction.OpenMapsNavigation()), maps = maps)
+        assertEquals(Status.SKIPPED, outcomes[0].status)
+        assertFalse(outcomes[0].success)
+        assertTrue(
+            "expected skipped summary, got: ${outcomes[0].summary}",
+            outcomes[0].summary.contains("No Maps link", ignoreCase = true)
         )
     }
 }

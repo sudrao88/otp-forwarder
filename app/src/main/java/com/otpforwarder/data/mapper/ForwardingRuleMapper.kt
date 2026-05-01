@@ -83,6 +83,7 @@ fun ActionWithRecipients.toDomain(): RuleAction? = when (action.actionType) {
     RuleActionEntity.TYPE_RINGER_LOUD -> RuleAction.SetRingerLoud
     // Drop orphaned PlaceCall rows (recipient deleted without cascade) so we don't silently call id=0.
     RuleActionEntity.TYPE_PLACE_CALL -> action.callRecipientId?.let { RuleAction.PlaceCall(it) }
+    RuleActionEntity.TYPE_OPEN_MAPS -> RuleAction.OpenMapsNavigation(autoLaunch = action.mapsAutoLaunch)
     else -> error("Unknown actionType=${action.actionType}")
 }
 
@@ -104,6 +105,13 @@ fun RuleAction.toEntity(ruleId: Long, orderIndex: Int): RuleActionEntity = when 
         orderIndex = orderIndex,
         actionType = RuleActionEntity.TYPE_PLACE_CALL,
         callRecipientId = recipientId
+    )
+    is RuleAction.OpenMapsNavigation -> RuleActionEntity(
+        ruleId = ruleId,
+        orderIndex = orderIndex,
+        actionType = RuleActionEntity.TYPE_OPEN_MAPS,
+        callRecipientId = null,
+        mapsAutoLaunch = autoLaunch
     )
 }
 

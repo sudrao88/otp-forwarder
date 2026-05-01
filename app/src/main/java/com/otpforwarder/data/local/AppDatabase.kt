@@ -13,7 +13,7 @@ import androidx.room.TypeConverters
         ActionRecipientCrossRef::class,
         OtpLogEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

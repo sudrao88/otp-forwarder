@@ -22,7 +22,8 @@ import javax.inject.Singleton
 class ExecuteRuleActionsUseCase @Inject constructor(
     private val forwardSms: ForwardSmsAction,
     private val setRingerLoud: SetRingerLoudAction,
-    private val placeCall: PlaceCallAction
+    private val placeCall: PlaceCallAction,
+    private val openMaps: OpenMapsAction
 ) {
 
     suspend operator fun invoke(
@@ -36,6 +37,7 @@ class ExecuteRuleActionsUseCase @Inject constructor(
                 is RuleAction.ForwardSms -> forwardOutcome(action, sms, recipientsById, alreadySentTo)
                 RuleAction.SetRingerLoud -> ringerOutcome()
                 is RuleAction.PlaceCall -> callOutcome(action, recipientsById)
+                is RuleAction.OpenMapsNavigation -> openMapsOutcome(action, sms)
             }
         }
     }
@@ -104,6 +106,18 @@ class ExecuteRuleActionsUseCase @Inject constructor(
         val summary = if (r.success) "Called ${recipient.name}" else "Call to ${recipient.name} failed"
         val status = if (r.success) ActionOutcome.Status.SUCCESS else ActionOutcome.Status.FAILED
         return ActionOutcome(action, status, summary)
+    }
+
+    private fun openMapsOutcome(
+        action: RuleAction.OpenMapsNavigation,
+        sms: IncomingSms
+    ): ActionOutcome {
+        val r = openMaps(sms)
+        return when {
+            r.skipped -> ActionOutcome(action, ActionOutcome.Status.SKIPPED, "No Maps link found")
+            r.success -> ActionOutcome(action, ActionOutcome.Status.SUCCESS, "Opened Google Maps")
+            else -> ActionOutcome(action, ActionOutcome.Status.FAILED, "Maps notification failed")
+        }
     }
 
     private fun names(list: List<Recipient>): String = list.joinToString(", ") { it.name }
