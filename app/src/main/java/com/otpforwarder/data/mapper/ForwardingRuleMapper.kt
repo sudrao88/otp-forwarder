@@ -34,6 +34,9 @@ fun RuleConditionEntity.toDomain(): RuleCondition {
             pattern = pattern.orEmpty(),
             connector = conn
         )
+        RuleConditionEntity.TYPE_MAPS_LINK -> RuleCondition.ContainsMapsLink(
+            connector = conn
+        )
         else -> error("Unknown conditionType=$conditionType")
     }
 }
@@ -62,6 +65,14 @@ fun RuleCondition.toEntity(ruleId: Long, orderIndex: Int): RuleConditionEntity =
         conditionType = RuleConditionEntity.TYPE_BODY_REGEX,
         otpTypeValue = null,
         pattern = pattern
+    )
+    is RuleCondition.ContainsMapsLink -> RuleConditionEntity(
+        ruleId = ruleId,
+        orderIndex = orderIndex,
+        connector = connector.name,
+        conditionType = RuleConditionEntity.TYPE_MAPS_LINK,
+        otpTypeValue = null,
+        pattern = null
     )
 }
 

@@ -70,6 +70,7 @@ private fun describeCondition(c: RuleCondition): String = when (c) {
     is RuleCondition.OtpTypeIs -> shortOtpTypeLabel(c.type)
     is RuleCondition.SenderMatches -> "from ${c.pattern.ifBlank { "…" }}"
     is RuleCondition.BodyContains -> "body has ${c.pattern.ifBlank { "…" }}"
+    is RuleCondition.ContainsMapsLink -> "has Google Maps link"
 }
 
 private fun describeAction(a: RuleAction, recipientsById: Map<Long, Recipient>): String = when (a) {

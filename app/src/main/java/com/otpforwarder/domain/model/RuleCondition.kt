@@ -1,5 +1,7 @@
 package com.otpforwarder.domain.model
 
+import com.otpforwarder.domain.detection.MapsLinkDetector
+
 sealed interface RuleCondition {
     val connector: Connector
 
@@ -29,5 +31,12 @@ sealed interface RuleCondition {
         private val compiled: Regex? = runCatching { Regex(pattern) }.getOrNull()
         override fun matches(sms: IncomingSms): Boolean =
             compiled?.containsMatchIn(sms.body) ?: false
+    }
+
+    data class ContainsMapsLink(
+        override val connector: Connector
+    ) : RuleCondition {
+        override fun matches(sms: IncomingSms): Boolean =
+            MapsLinkDetector.findMapsLink(sms.body) != null
     }
 }

@@ -390,6 +390,10 @@ private fun toConditionUi(c: RuleCondition): ConditionUi = when (c) {
     }
     is RuleCondition.SenderMatches -> ConditionUi.SenderMatches(c.pattern, c.connector)
     is RuleCondition.BodyContains -> ConditionUi.BodyContains(c.pattern, c.connector)
+    // ContainsMapsLink has no editor UI yet — Phase 5 wires it up. No code path
+    // creates this condition before then, so reaching this branch means the DB
+    // was populated out-of-band.
+    is RuleCondition.ContainsMapsLink -> error("ContainsMapsLink editor UI is added in Phase 5")
 }
 
 private fun toDomainCondition(c: ConditionUi): RuleCondition = when (c) {
