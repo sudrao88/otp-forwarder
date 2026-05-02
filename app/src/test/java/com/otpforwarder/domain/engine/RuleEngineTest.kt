@@ -317,10 +317,10 @@ class RuleEngineTest {
     }
 
     @Test
-    fun `non-OTP SMS still evaluated — OtpTypeIs ALL matches a body with no detected code`() {
+    fun `non-OTP SMS — OtpTypeIs ALL does not match a body with no detected code`() {
         val r = rule(1, listOf(otpType(OtpType.ALL)))
         val sms = nonOtpSms(sender = "MOM", body = "Where are you?")
-        assertEquals(1, evaluate(listOf(r), sms).size)
+        assertTrue(evaluate(listOf(r), sms).isEmpty())
     }
 
     @Test

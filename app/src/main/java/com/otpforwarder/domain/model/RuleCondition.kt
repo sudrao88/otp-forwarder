@@ -11,8 +11,10 @@ sealed interface RuleCondition {
         val type: OtpType,
         override val connector: Connector
     ) : RuleCondition {
-        override fun matches(sms: IncomingSms): Boolean =
-            type == OtpType.ALL || sms.otp?.type == type
+        override fun matches(sms: IncomingSms): Boolean {
+            val otp = sms.otp ?: return false
+            return type == OtpType.ALL || otp.type == type
+        }
     }
 
     data class SenderMatches(
