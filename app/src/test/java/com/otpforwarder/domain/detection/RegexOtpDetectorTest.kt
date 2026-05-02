@@ -130,4 +130,14 @@ class RegexOtpDetectorTest {
         assertNull(detector.detect("X", "Your OTP is 12."))
         assertNull(detector.detect("X", "Your OTP is 1234567890."))
     }
+
+    @Test
+    fun `firstclub-style code-before-keyword extracts the code via bare-numeric tier`() {
+        val body = "Hi 690750 is your login OTP for Firstclub.\n" +
+            "<#> Please do not share this code with anyone\n" +
+            "TefNEjPX2vy -FirstClub"
+        val result = detector.detect("FirstClub", body)
+        assertNotNull(result)
+        assertEquals("690750", result!!.code)
+    }
 }

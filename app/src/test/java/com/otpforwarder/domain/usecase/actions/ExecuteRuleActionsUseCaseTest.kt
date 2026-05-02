@@ -129,7 +129,7 @@ class ExecuteRuleActionsUseCaseTest {
         assertEquals(actions, outcomes.map { it.action })
         assertTrue(outcomes.all { it.success })
         assertTrue(outcomes.all { it.status == Status.SUCCESS })
-        assertEquals(listOf("+111" to "OTP 482910"), sender.sent)
+        assertEquals(listOf("+111" to "The super duper secret number that I just got from HDFCBK is 482910"), sender.sent)
         assertEquals(1, ringer.calls)
         assertEquals(listOf(dad), call.called)
     }
@@ -152,7 +152,7 @@ class ExecuteRuleActionsUseCaseTest {
         assertFalse("call should fail", outcomes[1].success)
         assertEquals(Status.SUCCESS, outcomes[0].status)
         assertEquals(Status.FAILED, outcomes[1].status)
-        assertEquals(listOf("+111" to "OTP 482910"), sender.sent)
+        assertEquals(listOf("+111" to "The super duper secret number that I just got from HDFCBK is 482910"), sender.sent)
         assertEquals(listOf(dad), call.called)
         assertTrue(outcomes[0].summary.contains("Mom"))
         assertTrue(outcomes[1].summary.contains("Dad"))
@@ -171,7 +171,7 @@ class ExecuteRuleActionsUseCaseTest {
         assertEquals(2, outcomes.size)
         assertFalse(outcomes[0].success)
         assertTrue(outcomes[1].success)
-        assertEquals(listOf("+111" to "OTP 482910"), sender.sent)
+        assertEquals(listOf("+111" to "The super duper secret number that I just got from HDFCBK is 482910"), sender.sent)
     }
 
     @Test

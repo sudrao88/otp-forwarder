@@ -75,7 +75,6 @@ class EditRuleViewModel @Inject constructor(
         }
     }
 
-    fun setName(v: String) = _state.update { it.copy(name = v, nameError = null, generalError = null) }
     fun setPriority(v: String) = _state.update {
         val digits = v.filter { c -> c.isDigit() }
         it.copy(priority = digits.ifBlank { DEFAULT_PRIORITY.toString() })
@@ -226,15 +225,16 @@ class EditRuleViewModel @Inject constructor(
     fun requestDelete() = _state.update { it.copy(showDeleteConfirm = true) }
     fun dismissDelete() = _state.update { it.copy(showDeleteConfirm = false) }
 
-    fun save(onDone: () -> Unit) {
+    fun dismissNameDialog() = _state.update { it.copy(showNameDialog = false, nameError = null) }
+
+    fun requestSave() {
         val s = _state.value
         if (s.inFlight) return
-        var nameError: String? = null
-        var generalError: String? = null
-
-        if (s.name.isBlank()) nameError = "Name is required"
-        if (s.conditions.isEmpty()) generalError = "Add at least one condition"
-        else if (s.actions.isEmpty()) generalError = "Add at least one action"
+        val generalError: String? = when {
+            s.conditions.isEmpty() -> "Add at least one condition"
+            s.actions.isEmpty() -> "Add at least one action"
+            else -> null
+        }
 
         val validatedConditions = s.conditions.map(::validateCondition)
         val conditionsHaveErrors = validatedConditions.any(::conditionHasError)
@@ -242,10 +242,9 @@ class EditRuleViewModel @Inject constructor(
         val validatedActions = s.actions.map(::validateAction)
         val actionsHaveErrors = validatedActions.any(::actionHasError)
 
-        if (nameError != null || generalError != null || conditionsHaveErrors || actionsHaveErrors) {
+        if (generalError != null || conditionsHaveErrors || actionsHaveErrors) {
             _state.update {
                 it.copy(
-                    nameError = nameError,
                     generalError = generalError,
                     conditions = validatedConditions,
                     actions = validatedActions
@@ -254,16 +253,35 @@ class EditRuleViewModel @Inject constructor(
             return
         }
 
+        _state.update { it.copy(showNameDialog = true, nameError = null) }
+    }
+
+    fun confirmSaveWithName(name: String, onDone: () -> Unit) {
+        val s = _state.value
+        if (s.inFlight) return
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) {
+            _state.update { it.copy(nameError = "Name is required") }
+            return
+        }
+
         val priority = s.priority.toInt()
         val rule = ForwardingRule(
             id = editingRuleId,
-            name = s.name.trim(),
+            name = trimmed,
             isEnabled = true,
             priority = priority,
             conditions = s.conditions.map(::toDomainCondition),
             actions = s.actions.map(::toDomainAction)
         )
-        _state.update { it.copy(inFlight = true) }
+        _state.update {
+            it.copy(
+                inFlight = true,
+                name = trimmed,
+                nameError = null,
+                showNameDialog = false
+            )
+        }
         viewModelScope.launch {
             try {
                 if (s.isEditing) {
@@ -351,7 +369,8 @@ class EditRuleViewModel @Inject constructor(
         val showFullScreenIntentPermissionHint: Boolean = false,
         val generalError: String? = null,
         val inFlight: Boolean = false,
-        val showDeleteConfirm: Boolean = false
+        val showDeleteConfirm: Boolean = false,
+        val showNameDialog: Boolean = false
     ) {
         /**
          * Soft warnings shown alongside the form — they do not block save.

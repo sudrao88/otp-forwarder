@@ -56,7 +56,27 @@ class ForwardSmsActionUseCaseTest {
         assertEquals(listOf(mom, dad), result.sent)
         assertTrue(result.skipped.isEmpty())
         assertTrue(result.failed.isEmpty())
-        assertEquals(listOf("+111" to otp.originalMessage, "+222" to otp.originalMessage), sender.sent)
+        val expected = "The super duper secret number that I just got from HDFCBK is 482910"
+        assertEquals(listOf("+111" to expected, "+222" to expected), sender.sent)
+    }
+
+    @Test
+    fun `non-OTP messages are forwarded verbatim`() {
+        val sender = FakeSmsSender()
+        val useCase = ForwardSmsActionUseCase(sender)
+        val plain = IncomingSms(
+            sender = "Friend",
+            body = "Dinner at 8?",
+            otp = null,
+            receivedAt = Instant.parse("2026-04-19T00:00:00Z")
+        )
+        useCase(
+            plain,
+            RuleAction.ForwardSms(listOf(mom.id)),
+            recipientsById,
+            mutableSetOf()
+        )
+        assertEquals(listOf("+111" to "Dinner at 8?"), sender.sent)
     }
 
     @Test

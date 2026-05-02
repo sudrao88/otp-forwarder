@@ -164,4 +164,15 @@ class KeywordOtpClassifierTest {
         val (type, _) = classify("UNKNOWN", "Charged Rs. 500 to your a/c.")
         assertEquals(OtpType.TRANSACTION, type)
     }
+
+    @Test
+    fun `firstclub login OTP wording classifies as LOGIN`() {
+        val (type, _) = classify(
+            "FirstClub",
+            "Hi 690750 is your login OTP for Firstclub.\n" +
+                "<#> Please do not share this code with anyone\n" +
+                "TefNEjPX2vy -FirstClub"
+        )
+        assertEquals(OtpType.LOGIN, type)
+    }
 }

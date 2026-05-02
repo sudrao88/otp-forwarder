@@ -3,6 +3,7 @@ package com.otpforwarder.ui.screen.rules
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PersonSearch
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -112,16 +115,6 @@ fun EditRuleScreen(
         ) {
             Spacer(Modifier.height(4.dp))
 
-            OutlinedTextField(
-                value = state.name,
-                onValueChange = viewModel::setName,
-                label = { Text("Rule Name") },
-                isError = state.nameError != null,
-                supportingText = { state.nameError?.let { Text(it) } },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
             ConditionsSection(
                 conditions = state.conditions,
                 onAdd = viewModel::addCondition,
@@ -134,6 +127,7 @@ fun EditRuleScreen(
             ActionsSection(
                 actions = state.actions,
                 allRecipients = state.allRecipients,
+                mapsConditionPresent = state.conditions.any { it is ConditionUi.ContainsMapsLink },
                 showLoudModePermissionHint = state.showLoudModePermissionHint,
                 showCallPermissionHint = state.showCallPermissionHint,
                 showFullScreenIntentPermissionHint = state.showFullScreenIntentPermissionHint,
@@ -148,15 +142,19 @@ fun EditRuleScreen(
                 onGrantFullScreenIntent = viewModel::openFullScreenIntentSettings
             )
 
-            OutlinedTextField(
-                value = state.priority,
-                onValueChange = viewModel::setPriority,
-                label = { Text("Priority") },
-                supportingText = { Text("Lower numbers run first when multiple rules match.") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
+            if (state.isEditing) {
+                AdvancedOptionsSection {
+                    OutlinedTextField(
+                        value = state.priority,
+                        onValueChange = viewModel::setPriority,
+                        label = { Text("Priority") },
+                        supportingText = { Text("Lower numbers run first when multiple rules match.") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
 
             state.generalError?.let { msg ->
                 Text(
@@ -175,7 +173,7 @@ fun EditRuleScreen(
             }
 
             Button(
-                onClick = { viewModel.save(onBack) },
+                onClick = viewModel::requestSave,
                 enabled = !state.inFlight,
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -183,6 +181,16 @@ fun EditRuleScreen(
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (state.showNameDialog) {
+        NameRuleDialog(
+            initialName = state.name,
+            error = state.nameError,
+            inFlight = state.inFlight,
+            onDismiss = viewModel::dismissNameDialog,
+            onConfirm = { viewModel.confirmSaveWithName(it, onBack) }
+        )
     }
 
     if (state.showDeleteConfirm) {
@@ -480,6 +488,7 @@ private fun AddConditionButton(
 private fun ActionsSection(
     actions: List<ActionUi>,
     allRecipients: List<Recipient>,
+    mapsConditionPresent: Boolean,
     showLoudModePermissionHint: Boolean,
     showCallPermissionHint: Boolean,
     showFullScreenIntentPermissionHint: Boolean,
@@ -524,7 +533,8 @@ private fun ActionsSection(
             onAdd = onAdd,
             forwardDisabled = hasForward,
             loudDisabled = hasLoud,
-            openMapsDisabled = hasOpenMaps
+            openMapsDisabled = hasOpenMaps,
+            openMapsAvailable = mapsConditionPresent
         )
     }
 }
@@ -799,7 +809,8 @@ private fun AddActionButton(
     onAdd: (ActionKind) -> Unit,
     forwardDisabled: Boolean,
     loudDisabled: Boolean,
-    openMapsDisabled: Boolean
+    openMapsDisabled: Boolean,
+    openMapsAvailable: Boolean
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -830,16 +841,85 @@ private fun AddActionButton(
                     expanded = false
                 }
             )
-            DropdownMenuItem(
-                text = { Text("Open Google Maps navigation") },
-                enabled = !openMapsDisabled,
-                onClick = {
-                    onAdd(ActionKind.OPEN_MAPS)
-                    expanded = false
-                }
-            )
+            if (openMapsAvailable) {
+                DropdownMenuItem(
+                    text = { Text("Open Google Maps navigation") },
+                    enabled = !openMapsDisabled,
+                    onClick = {
+                        onAdd(ActionKind.OPEN_MAPS)
+                        expanded = false
+                    }
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun AdvancedOptionsSection(content: @Composable () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Advanced options",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Hide advanced options" else "Show advanced options"
+            )
+        }
+        if (expanded) {
+            content()
+        }
+    }
+}
+
+@Composable
+private fun NameRuleDialog(
+    initialName: String,
+    error: String?,
+    inFlight: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember { mutableStateOf(initialName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Name your rule") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Rule Name") },
+                isError = error != null,
+                supportingText = { error?.let { Text(it) } },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name) },
+                enabled = !inFlight
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !inFlight) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
