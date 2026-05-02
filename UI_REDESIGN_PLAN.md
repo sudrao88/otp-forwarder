@@ -409,14 +409,31 @@ feat(ui): add applet-builder components (IfThenBlock, ConditionItem, ActionItem,
 - Bottom-bar visibility logic (hidden on onboarding) stays exactly as is.
 
 ### 5.2 `app/src/main/java/com/otpforwarder/ui/screen/home/HomeScreen.kt`
-- TopAppBar → `AppTopBar(title = "OTP Forwarder", actions = { BrandSwitch(checked = state.masterEnabled, onCheckedChange = vm::setMasterEnabled, showLabel = true) })`
-- Day-bucket headers (`Today`, `Yesterday`, `Earlier`) → `SectionHeader(eyebrow = "TODAY"/…, title = null)` — actually use a simpler signature: pass eyebrow only, no title. Adjust `SectionHeader` if needed to allow title-less variant, OR just render a `Text` with `labelSmall` ALL-CAPS Ink500 directly here.
-- `OtpLogCard` → rebuild with `AppCard(tone = CardTone.Default)`:
-  - Row: `ServiceIconCircle(icon = Icons.Outlined.Sms, tint = brand.iconBlue)` for normal forwards; tint = `brand.warning` for partial; tint = `brand.danger` for failed (still tap-to-retry)
-  - Column { Row { titleMedium sender, Spacer.weight, labelMedium time Ink500 }, bodyLarge code, bodyMedium summary Ink500 }
-  - Footer: `StatusPill(label, tone)` — Sent → Success, Partial → Warning, Failed → Danger ("Failed · tap to retry"), Skipped → Neutral
-- Empty state → `EmptyState(icon = Icons.Outlined.Inbox, title = "All clear", subtitle = "Forwarded OTPs will show up here")`
-- Snackbar/retry behavior unchanged
+
+**Important**: this screen renders a unified per-SMS feed (every received SMS, matched or not), using `com.otpforwarder.domain.model.ReceivedSms` and string statuses from `ReceivedSmsStatus` (`PENDING`, `NO_MATCH`, `FORWARDED`, `PARTIAL`, `FAILED`, `SKIPPED`, `ERROR`). Read the current `HomeScreen.kt` and `HomeViewModel.kt` before editing — preserve all existing state shape, click handlers, the kebab menu, the clear-feed confirmation, the snackbar/retry events, and the day-bucket grouping logic.
+
+Existing utilities to keep using (do not move): `com.otpforwarder.ui.util.DayBucket`, `dayBucket(Instant)`, `formatRelativeTime(Instant)`, `DayBucket.label()`. The `HomeViewModel.isMatched(status)` companion helper stays.
+
+Migration:
+- TopAppBar → `AppTopBar(title = "OTP Forwarder", actions = { BrandSwitch(checked = state.masterEnabled, onCheckedChange = vm::setMasterEnabled, showLabel = true); IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, …) }; DropdownMenu(...) { DropdownMenuItem(text = "Clear feed", enabled = entries.isNotEmpty(), onClick = { confirmClear = true }) } })`
+- Clear-feed confirmation `AlertDialog` → `AppDialog(title = "Clear feed?", confirmLabel = "Clear", danger = true, onConfirm = { vm.clearFeed() }, onDismiss = …) { Text("This deletes every recorded message. Forwarding rules are not affected.") }`
+- Feed summary item (top of LazyColumn): `Text("{matched} forwarded · {unmatched} not matched", style = bodyMedium, color = Ink500)` — keep the inline `FeedSummary` composable or render directly
+- Day-bucket headers → render as `Text(bucket.label(), style = labelSmall ALL-CAPS, color = Ink500, letterSpacing = 0.5sp, padding(top=8.dp, bottom=4.dp))` (do not invent a new SectionHeader variant)
+- `ReceivedSmsCard` → rebuild with `AppCard(tone = if (HomeViewModel.isMatched(entry.processingStatus)) CardTone.Brand else CardTone.Default, onClick = if (entry.processingStatus == ReceivedSmsStatus.FAILED) onRetry else null)`:
+  - Row: `ServiceIconCircle(icon, tint, size = 32.dp)` where icon/tint come from status:
+    - FORWARDED → `Icons.Outlined.CheckCircle` + `brand.success`
+    - PARTIAL → `Icons.Outlined.RemoveCircle` + `brand.warning`
+    - FAILED, ERROR → `Icons.Outlined.ErrorOutline` + `brand.danger`
+    - SKIPPED → `Icons.Outlined.SkipNext` + `brand.iconAmber`
+    - NO_MATCH → `Icons.Outlined.Sms` + `Ink500`
+    - PENDING → `Icons.Outlined.Schedule` + `Ink500`
+    - any other → `Icons.Outlined.Sms` + `Ink500`
+  - Spacer 12dp
+  - Column { Row { titleMedium sender (weight 1), labelMedium relative-time Ink500 }, 6dp, bodyMedium body (maxLines=3, ellipsis), if (otpCode != null || otpType != null) { 6dp, bodySmall "Code {code} · {type.name}" Ink500 }, 8dp, `StatusPill(label = statusLabel(entry), tone = pillToneFor(status))` }
+  - `pillToneFor`: FORWARDED → Success, PARTIAL → Warning, FAILED/ERROR → Danger, SKIPPED → Warning, NO_MATCH → Neutral, PENDING → Info, else → Neutral
+  - `statusLabel(entry)` mirrors the existing logic: "Sent to {recipients}" / "Rule fired" / "Partial — {recipients}" / "Failed — tap to retry" / "Skipped" / "No matching rule" / "Processing…" / "Pipeline error" — strip the leading Unicode symbols (✓ ◑ ✗ ⏭) since `StatusPill` provides the leading dot
+- Empty state → `EmptyState(icon = Icons.Outlined.Inbox, title = "No messages yet", subtitle = "Incoming SMS will appear here")`
+- Snackbar/retry events behavior unchanged (keep `LaunchedEffect` + `SnackbarHost` exactly as today)
 
 ### 5.3 `app/src/main/java/com/otpforwarder/ui/screen/rules/RulesScreen.kt`
 - TopAppBar → `AppTopBar(title = "Forwarding Rules")`
