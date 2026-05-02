@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
@@ -52,6 +53,7 @@ class OtpProcessingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val sender = intent?.getStringExtra(EXTRA_SENDER)
         val body = intent?.getStringExtra(EXTRA_BODY)
+        val receivedAtMillis = intent?.getLongExtra(EXTRA_RECEIVED_AT, 0L) ?: 0L
         if (sender.isNullOrBlank() || body.isNullOrBlank()) {
             finishIfIdle()
             return START_NOT_STICKY
@@ -61,10 +63,12 @@ class OtpProcessingService : Service() {
             return START_NOT_STICKY
         }
 
+        val receivedAt = if (receivedAtMillis > 0) Instant.ofEpochMilli(receivedAtMillis) else Instant.now()
+
         inFlight.incrementAndGet()
         scope.launch {
             try {
-                val result = processIncomingSms(sender, body)
+                val result = processIncomingSms(sender, body, receivedAt)
                 when (result) {
                     is ProcessIncomingSmsUseCase.Result.Forwarded -> {
                         notificationHelper.notifyForwarded(
@@ -78,7 +82,7 @@ class OtpProcessingService : Service() {
             } catch (t: Throwable) {
                 Log.e(TAG, "Pipeline failed; scheduling retry", t)
                 notificationHelper.notifyRetrying(sender, body)
-                RetryWorker.enqueue(applicationContext, sender, body)
+                RetryWorker.enqueue(applicationContext, sender, body, receivedAtMillis)
             } finally {
                 if (inFlight.decrementAndGet() == 0) {
                     stopSelf()
@@ -122,11 +126,13 @@ class OtpProcessingService : Service() {
         private const val TAG = "OtpProcessingService"
         internal const val EXTRA_SENDER = "extra_sender"
         internal const val EXTRA_BODY = "extra_body"
+        internal const val EXTRA_RECEIVED_AT = "extra_received_at"
 
-        fun intent(context: Context, sender: String, body: String): Intent =
+        fun intent(context: Context, sender: String, body: String, receivedAtMillis: Long): Intent =
             Intent(context, OtpProcessingService::class.java).apply {
                 putExtra(EXTRA_SENDER, sender)
                 putExtra(EXTRA_BODY, body)
+                putExtra(EXTRA_RECEIVED_AT, receivedAtMillis)
             }
     }
 }

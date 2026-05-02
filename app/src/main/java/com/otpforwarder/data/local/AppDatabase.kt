@@ -11,14 +11,14 @@ import androidx.room.TypeConverters
         RuleConditionEntity::class,
         RuleActionEntity::class,
         ActionRecipientCrossRef::class,
-        OtpLogEntity::class
+        ReceivedSmsEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun recipientDao(): RecipientDao
     abstract fun forwardingRuleDao(): ForwardingRuleDao
-    abstract fun otpLogDao(): OtpLogDao
+    abstract fun receivedSmsDao(): ReceivedSmsDao
 }

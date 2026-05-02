@@ -6,20 +6,21 @@ import com.otpforwarder.domain.engine.RuleEngine
 import com.otpforwarder.domain.model.ClassifierTier
 import com.otpforwarder.domain.model.Connector
 import com.otpforwarder.domain.model.ForwardingRule
+import com.otpforwarder.domain.model.IncomingSms
 import com.otpforwarder.domain.model.Otp
-import com.otpforwarder.domain.model.OtpLogEntry
 import com.otpforwarder.domain.model.OtpType
+import com.otpforwarder.domain.model.ReceivedSms
+import com.otpforwarder.domain.model.ReceivedSmsStatus
 import com.otpforwarder.domain.model.Recipient
 import com.otpforwarder.domain.model.RuleAction
 import com.otpforwarder.domain.model.RuleCondition
 import com.otpforwarder.domain.repository.ForwardingRuleRepository
-import com.otpforwarder.domain.repository.OtpLogRepository
+import com.otpforwarder.domain.repository.ReceivedSmsRepository
 import com.otpforwarder.domain.repository.RecipientRepository
 import com.otpforwarder.domain.usecase.actions.ExecuteRuleActionsUseCase
 import com.otpforwarder.domain.usecase.actions.ForwardSmsActionUseCase
 import com.otpforwarder.domain.usecase.actions.OpenMapsAction
 import com.otpforwarder.domain.usecase.actions.OpenMapsResult
-import com.otpforwarder.domain.model.IncomingSms
 import com.otpforwarder.domain.usecase.actions.PlaceCallAction
 import com.otpforwarder.domain.usecase.actions.PlaceCallResult
 import com.otpforwarder.domain.usecase.actions.SetRingerLoudAction
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,12 +38,6 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 
-/**
- * Phase 1 invariant: rules are evaluated against every SMS, OTP or not. The
- * legacy pipeline short-circuited on `OtpDetector.detect` returning null, so a
- * `SenderMatches` + `SetRingerLoud` rule never fired on a plain text. This test
- * locks that fix in.
- */
 class ProcessIncomingSmsUseCaseTest {
 
     private val now = Instant.parse("2026-04-25T12:00:00Z")
@@ -85,16 +81,20 @@ class ProcessIncomingSmsUseCaseTest {
         override suspend fun deleteRecipient(recipient: Recipient) = Unit
     }
 
-    private class CapturingLogRepo : OtpLogRepository {
-        val inserted = mutableListOf<OtpLogEntry>()
-        override fun getRecentLogs(sinceTimestamp: Long): Flow<List<OtpLogEntry>> = flowOf(emptyList())
-        override suspend fun insertLog(entry: OtpLogEntry): Long {
+    private class CapturingFeedRepo : ReceivedSmsRepository {
+        val inserted = mutableListOf<ReceivedSms>()
+        val updated = mutableListOf<ReceivedSms>()
+        override fun getRecent(sinceTimestamp: Long): Flow<List<ReceivedSms>> = flowOf(emptyList())
+        override suspend fun insert(entry: ReceivedSms): Long {
             inserted += entry
             return inserted.size.toLong()
         }
-        override suspend fun updateLog(entry: OtpLogEntry) = Unit
-        override suspend fun pruneOldLogs(cutoffTimestamp: Long) = Unit
-        override suspend fun getLogById(id: Long): OtpLogEntry? = null
+        override suspend fun update(entry: ReceivedSms) {
+            updated += entry
+        }
+        override suspend fun getById(id: Long): ReceivedSms? = null
+        override suspend fun pruneOlderThan(cutoffTimestamp: Long) = Unit
+        override suspend fun deleteAll() = Unit
     }
 
     private class CountingRinger(private val result: SetRingerLoudResult) : SetRingerLoudAction {
@@ -120,8 +120,30 @@ class ProcessIncomingSmsUseCaseTest {
             error("OpenMaps must not run for non-maps rule")
     }
 
+    private fun makeUseCase(
+        detector: OtpDetector,
+        classifier: OtpClassifier,
+        rules: List<ForwardingRule>,
+        feed: CapturingFeedRepo,
+        recipients: FakeRecipientRepo = FakeRecipientRepo(),
+        ringer: SetRingerLoudAction = CountingRinger(SetRingerLoudResult(true, true))
+    ) = ProcessIncomingSmsUseCase(
+        detector = detector,
+        classifier = classifier,
+        ruleEngine = RuleEngine(FakeRuleRepo(rules)),
+        executeRuleActions = ExecuteRuleActionsUseCase(
+            forwardSms = ForwardSmsActionUseCase(UnusedSmsSender),
+            setRingerLoud = ringer,
+            placeCall = UnusedPlaceCall,
+            openMaps = UnusedOpenMaps
+        ),
+        recipientRepository = recipients,
+        receivedSmsRepository = feed,
+        clock = clock
+    )
+
     @Test
-    fun `non-OTP SMS that matches a SenderMatches rule still fires SetRingerLoud`() {
+    fun `non-OTP SMS that matches a SenderMatches rule still fires SetRingerLoud and is logged as FORWARDED`() {
         val ringer = CountingRinger(SetRingerLoudResult(ringerChanged = true, bypassedDnd = true))
         val ringerRule = ForwardingRule(
             id = 1,
@@ -131,44 +153,38 @@ class ProcessIncomingSmsUseCaseTest {
             conditions = listOf(RuleCondition.SenderMatches(pattern = "MOM", connector = Connector.AND)),
             actions = listOf(RuleAction.SetRingerLoud)
         )
-        val ruleRepo = FakeRuleRepo(listOf(ringerRule))
-        val logRepo = CapturingLogRepo()
+        val feed = CapturingFeedRepo()
         val classifier = FakeOtpClassifier()
 
-        val useCase = ProcessIncomingSmsUseCase(
+        val useCase = makeUseCase(
             detector = FakeOtpDetector(detected = null),
             classifier = classifier,
-            ruleEngine = RuleEngine(ruleRepo),
-            executeRuleActions = ExecuteRuleActionsUseCase(
-                forwardSms = ForwardSmsActionUseCase(UnusedSmsSender),
-                setRingerLoud = ringer,
-                placeCall = UnusedPlaceCall,
-                openMaps = UnusedOpenMaps
-            ),
-            recipientRepository = FakeRecipientRepo(),
-            otpLogRepository = logRepo,
-            clock = clock
+            rules = listOf(ringerRule),
+            feed = feed,
+            ringer = ringer
         )
 
         val result = runBlocking { useCase("MOM", "Where are you?") }
 
-        assertTrue("expected Forwarded result, got $result", result is ProcessIncomingSmsUseCase.Result.Forwarded)
-        assertEquals("ringer must fire on a non-OTP SMS", 1, ringer.calls)
+        assertTrue("expected Forwarded, got $result", result is ProcessIncomingSmsUseCase.Result.Forwarded)
+        assertEquals(1, ringer.calls)
         assertEquals(0, classifier.calls)
-        assertEquals(1, logRepo.inserted.size)
-        val logged = logRepo.inserted.single()
-        assertNull("non-OTP log entry should have null code", logged.code)
-        assertNull("non-OTP log entry should have null otpType", logged.otpType)
-        assertNull("non-OTP log entry should have null confidence", logged.confidence)
-        assertNull("non-OTP log entry should have null classifierTier", logged.classifierTier)
-        assertEquals("MOM", logged.sender)
-        assertEquals("Where are you?", logged.originalMessage)
-        assertEquals(ProcessIncomingSmsUseCase.STATUS_SENT, logged.status)
-        assertEquals(listOf("Rang loudly"), logged.summaryLines)
+        assertEquals(1, feed.inserted.size)
+        assertEquals(ReceivedSmsStatus.PENDING, feed.inserted.single().processingStatus)
+        val final = feed.updated.single()
+        assertEquals(ReceivedSmsStatus.FORWARDED, final.processingStatus)
+        assertEquals(listOf("Mom alerts"), final.matchedRuleNames)
+        assertNull("non-OTP feed row should have null code", final.otpCode)
+        assertNull(final.otpType)
+        assertNull(final.confidence)
+        assertNull(final.classifierTier)
+        assertEquals("MOM", final.sender)
+        assertEquals("Where are you?", final.body)
+        assertEquals(now, final.processedAt)
     }
 
     @Test
-    fun `OTP SMS still classifies and logs the OTP fields`() {
+    fun `OTP SMS classifies and records OTP fields on the feed row`() {
         val detected = Otp(
             code = "482910",
             type = OtpType.UNKNOWN,
@@ -178,7 +194,6 @@ class ProcessIncomingSmsUseCaseTest {
             confidence = 0.95,
             classifierTier = ClassifierTier.NONE
         )
-        val ringer = CountingRinger(SetRingerLoudResult(ringerChanged = true, bypassedDnd = true))
         val ringerRule = ForwardingRule(
             id = 1,
             name = "All OTPs ring",
@@ -188,55 +203,75 @@ class ProcessIncomingSmsUseCaseTest {
             actions = listOf(RuleAction.SetRingerLoud)
         )
         val classifier = FakeOtpClassifier(type = OtpType.TRANSACTION, tier = ClassifierTier.KEYWORD)
-        val logRepo = CapturingLogRepo()
+        val feed = CapturingFeedRepo()
 
-        val useCase = ProcessIncomingSmsUseCase(
+        val useCase = makeUseCase(
             detector = FakeOtpDetector(detected = detected),
             classifier = classifier,
-            ruleEngine = RuleEngine(FakeRuleRepo(listOf(ringerRule))),
-            executeRuleActions = ExecuteRuleActionsUseCase(
-                forwardSms = ForwardSmsActionUseCase(UnusedSmsSender),
-                setRingerLoud = ringer,
-                placeCall = UnusedPlaceCall,
-                openMaps = UnusedOpenMaps
-            ),
-            recipientRepository = FakeRecipientRepo(),
-            otpLogRepository = logRepo,
-            clock = clock
+            rules = listOf(ringerRule),
+            feed = feed
         )
 
         val result = runBlocking { useCase("HDFCBK", "Your OTP is 482910") }
         assertTrue(result is ProcessIncomingSmsUseCase.Result.Forwarded)
         assertEquals(1, classifier.calls)
-        val logged = logRepo.inserted.single()
-        assertEquals("482910", logged.code)
-        assertEquals(OtpType.TRANSACTION, logged.otpType)
-        assertEquals(ClassifierTier.KEYWORD, logged.classifierTier)
-        assertEquals(0.95, logged.confidence!!, 0.0001)
+        val final = feed.updated.single()
+        assertEquals("482910", final.otpCode)
+        assertEquals(OtpType.TRANSACTION, final.otpType)
+        assertEquals(ClassifierTier.KEYWORD, final.classifierTier)
+        assertEquals(0.95, final.confidence!!, 0.0001)
+        assertEquals(ReceivedSmsStatus.FORWARDED, final.processingStatus)
     }
 
     @Test
-    fun `non-OTP SMS with no matching rule returns NoMatchingRule and does not log`() {
+    fun `SMS with no matching rule still produces a NO_MATCH feed row`() {
         val classifier = FakeOtpClassifier()
-        val logRepo = CapturingLogRepo()
-        val useCase = ProcessIncomingSmsUseCase(
+        val feed = CapturingFeedRepo()
+        val useCase = makeUseCase(
             detector = FakeOtpDetector(detected = null),
             classifier = classifier,
-            ruleEngine = RuleEngine(FakeRuleRepo(emptyList())),
-            executeRuleActions = ExecuteRuleActionsUseCase(
-                forwardSms = ForwardSmsActionUseCase(UnusedSmsSender),
-                setRingerLoud = CountingRinger(SetRingerLoudResult(true, true)),
-                placeCall = UnusedPlaceCall,
-                openMaps = UnusedOpenMaps
-            ),
-            recipientRepository = FakeRecipientRepo(),
-            otpLogRepository = logRepo,
-            clock = clock
+            rules = emptyList(),
+            feed = feed
         )
 
         val result = runBlocking { useCase("RANDOM", "hello world") }
         assertTrue(result is ProcessIncomingSmsUseCase.Result.NoMatchingRule)
         assertEquals(0, classifier.calls)
-        assertTrue(logRepo.inserted.isEmpty())
+        assertEquals(1, feed.inserted.size)
+        val final = feed.updated.single()
+        assertEquals(ReceivedSmsStatus.NO_MATCH, final.processingStatus)
+        assertEquals("RANDOM", final.sender)
+        assertEquals("hello world", final.body)
+        assertEquals(emptyList<String>(), final.matchedRuleNames)
+        assertNotNull(final.processedAt)
+    }
+
+    @Test
+    fun `OTP detected but no matching rule records detected code on NO_MATCH row`() {
+        val detected = Otp(
+            code = "690750",
+            type = OtpType.UNKNOWN,
+            sender = "FirstClub",
+            originalMessage = "Hi 690750 is your login OTP for Firstclub.",
+            detectedAt = now,
+            confidence = 0.50,
+            classifierTier = ClassifierTier.NONE
+        )
+        val classifier = FakeOtpClassifier(type = OtpType.LOGIN, tier = ClassifierTier.KEYWORD)
+        val feed = CapturingFeedRepo()
+
+        val useCase = makeUseCase(
+            detector = FakeOtpDetector(detected = detected),
+            classifier = classifier,
+            rules = emptyList(),
+            feed = feed
+        )
+
+        val result = runBlocking { useCase("FirstClub", "Hi 690750 is your login OTP for Firstclub.") }
+        assertTrue(result is ProcessIncomingSmsUseCase.Result.NoMatchingRule)
+        val final = feed.updated.single()
+        assertEquals(ReceivedSmsStatus.NO_MATCH, final.processingStatus)
+        assertEquals("690750", final.otpCode)
+        assertEquals(OtpType.LOGIN, final.otpType)
     }
 }

@@ -14,6 +14,7 @@ import androidx.work.workDataOf
 import com.otpforwarder.domain.usecase.ProcessIncomingSmsUseCase
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 /**
@@ -34,9 +35,11 @@ class RetryWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         val sender = inputData.getString(KEY_SENDER) ?: return Result.failure()
         val body = inputData.getString(KEY_BODY) ?: return Result.failure()
+        val receivedAtMillis = inputData.getLong(KEY_RECEIVED_AT, 0L)
+        val receivedAt = if (receivedAtMillis > 0) Instant.ofEpochMilli(receivedAtMillis) else Instant.now()
 
         return try {
-            when (processIncomingSms(sender, body)) {
+            when (processIncomingSms(sender, body, receivedAt)) {
                 is ProcessIncomingSmsUseCase.Result.Forwarded,
                 is ProcessIncomingSmsUseCase.Result.NoMatchingRule -> Result.success()
             }
@@ -53,16 +56,18 @@ class RetryWorker @AssistedInject constructor(
         private const val TAG = "RetryWorker"
         const val KEY_SENDER = "sender"
         const val KEY_BODY = "body"
+        const val KEY_RECEIVED_AT = "received_at"
         private const val INITIAL_BACKOFF_SECONDS = 10L
         private const val MAX_ATTEMPTS = 5
 
         private fun uniqueName(sender: String, body: String): String =
             "otp-retry-${(sender + body).hashCode()}"
 
-        fun enqueue(context: Context, sender: String, body: String) {
+        fun enqueue(context: Context, sender: String, body: String, receivedAtMillis: Long) {
             val data: Data = workDataOf(
                 KEY_SENDER to sender,
-                KEY_BODY to body
+                KEY_BODY to body,
+                KEY_RECEIVED_AT to receivedAtMillis
             )
             val request = OneTimeWorkRequestBuilder<RetryWorker>()
                 .setInputData(data)

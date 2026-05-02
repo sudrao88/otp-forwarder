@@ -47,13 +47,14 @@ class SmsReceiver : BroadcastReceiver() {
             val body = sms.displayMessageBody ?: sms.messageBody ?: return@mapNotNull null
             sender to body
         }
+        val receivedAtMillis = System.currentTimeMillis()
         for ((sender, body) in assembleMultipart(parts)) {
-            deliver(context, sender, body)
+            deliver(context, sender, body, receivedAtMillis)
         }
     }
 
-    private fun deliver(context: Context, sender: String, body: String) {
-        val serviceIntent = OtpProcessingService.intent(context, sender, body)
+    private fun deliver(context: Context, sender: String, body: String, receivedAtMillis: Long) {
+        val serviceIntent = OtpProcessingService.intent(context, sender, body, receivedAtMillis)
         try {
             startProcessingService(context, serviceIntent)
         } catch (t: Throwable) {
@@ -61,7 +62,7 @@ class SmsReceiver : BroadcastReceiver() {
             // IllegalStateException when the app is backgrounded by the system:
             // fall back to WorkManager so the SMS isn't lost.
             Log.w(TAG, "Foreground service start blocked, falling back to RetryWorker", t)
-            runCatching { RetryWorker.enqueue(context, sender, body) }
+            runCatching { RetryWorker.enqueue(context, sender, body, receivedAtMillis) }
                 .onFailure { Log.e(TAG, "RetryWorker enqueue failed", it) }
         }
     }

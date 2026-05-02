@@ -3,9 +3,10 @@ package com.otpforwarder.ui.screen.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.otpforwarder.data.settings.SettingsRepository
-import com.otpforwarder.domain.model.OtpLogEntry
+import com.otpforwarder.domain.model.ReceivedSms
+import com.otpforwarder.domain.model.ReceivedSmsStatus
+import com.otpforwarder.domain.repository.ReceivedSmsRepository
 import com.otpforwarder.domain.usecase.ProcessIncomingSmsUseCase
-import com.otpforwarder.domain.repository.OtpLogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.BufferOverflow
@@ -29,17 +30,13 @@ import javax.inject.Inject
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val settings: SettingsRepository,
-    private val otpLogRepository: OtpLogRepository,
+    private val receivedSmsRepository: ReceivedSmsRepository,
     private val processIncomingSms: ProcessIncomingSmsUseCase,
     private val clock: Clock
 ) : ViewModel() {
 
     private val tick = MutableStateFlow(0L)
 
-    /**
-     * Emits a fresh cutoff timestamp once per [CUTOFF_REFRESH_MS] so old logs
-     * age out even while the UI is open and `tick` hasn't changed (retry).
-     */
     private val cutoffs = channelFlow {
         while (true) {
             send(clock.instant().minus(WINDOW).toEpochMilli())
@@ -57,11 +54,11 @@ class HomeViewModel @Inject constructor(
     val uiState: StateFlow<HomeUiState> = combine(
         settings.masterEnabled,
         combine(tick, cutoffs) { _, cutoff -> cutoff }
-            .flatMapLatest { cutoff -> otpLogRepository.getRecentLogs(cutoff) }
-    ) { enabled, logs ->
+            .flatMapLatest { cutoff -> receivedSmsRepository.getRecent(cutoff) }
+    ) { enabled, entries ->
         HomeUiState(
             masterEnabled = enabled,
-            logs = logs.sortedByDescending { it.forwardedAt }
+            entries = entries.sortedByDescending { it.receivedAt }
         )
     }.stateIn(
         scope = viewModelScope,
@@ -73,12 +70,9 @@ class HomeViewModel @Inject constructor(
         settings.setMasterEnabled(enabled)
     }
 
-    fun retry(entry: OtpLogEntry) {
+    fun retry(entry: ReceivedSms) {
         viewModelScope.launch {
-            // Re-run the full pipeline against the original SMS. On success the
-            // original failed log stays in place; a new log entry reflects the
-            // retry outcome. The "tick" refresh keeps the list in sync.
-            val outcome = runCatching { processIncomingSms(entry.sender, entry.originalMessage) }
+            val outcome = runCatching { processIncomingSms(entry.sender, entry.body) }
             val event = outcome.fold(
                 onSuccess = { result ->
                     when (result) {
@@ -93,10 +87,20 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun clearFeed() {
+        viewModelScope.launch {
+            receivedSmsRepository.deleteAll()
+            tick.update { it + 1 }
+        }
+    }
+
     data class HomeUiState(
         val masterEnabled: Boolean = true,
-        val logs: List<OtpLogEntry> = emptyList()
-    )
+        val entries: List<ReceivedSms> = emptyList()
+    ) {
+        val matchedCount: Int = entries.count { isMatched(it.processingStatus) }
+        val unmatchedCount: Int = entries.count { it.processingStatus == ReceivedSmsStatus.NO_MATCH }
+    }
 
     sealed interface RetryEvent {
         data object Succeeded : RetryEvent
@@ -105,8 +109,16 @@ class HomeViewModel @Inject constructor(
     }
 
     companion object {
-        private val WINDOW: Duration = Duration.ofHours(12)
+        private val WINDOW: Duration = Duration.ofDays(30)
         private const val CUTOFF_REFRESH_MS = 60_000L
         private const val STATE_IN_TIMEOUT_MS = 5_000L
+
+        fun isMatched(status: String): Boolean = when (status) {
+            ReceivedSmsStatus.FORWARDED,
+            ReceivedSmsStatus.PARTIAL,
+            ReceivedSmsStatus.FAILED,
+            ReceivedSmsStatus.SKIPPED -> true
+            else -> false
+        }
     }
 }

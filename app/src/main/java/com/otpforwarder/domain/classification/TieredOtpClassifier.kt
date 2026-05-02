@@ -14,7 +14,7 @@ import javax.inject.Singleton
  * needed here — and wrapping in one would mask `CancellationException`.
  *
  * The returned [ClassifierTier] identifies which tier produced the result and
- * is persisted in [com.otpforwarder.data.local.OtpLogEntity] for observability.
+ * is persisted in [com.otpforwarder.data.local.ReceivedSmsEntity] for observability.
  */
 @Singleton
 class TieredOtpClassifier @Inject constructor(

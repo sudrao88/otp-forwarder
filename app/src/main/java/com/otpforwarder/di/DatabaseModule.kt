@@ -4,17 +4,18 @@ import android.content.Context
 import androidx.room.Room
 import com.otpforwarder.data.local.AppDatabase
 import com.otpforwarder.data.local.ForwardingRuleDao
-import com.otpforwarder.data.local.OtpLogDao
+import com.otpforwarder.data.local.ReceivedSmsDao
 import com.otpforwarder.data.local.RecipientDao
 import com.otpforwarder.data.local.migrations.MIGRATION_1_2
 import com.otpforwarder.data.local.migrations.MIGRATION_2_3
 import com.otpforwarder.data.local.migrations.MIGRATION_3_4
 import com.otpforwarder.data.local.migrations.MIGRATION_4_5
+import com.otpforwarder.data.local.migrations.MIGRATION_5_6
 import com.otpforwarder.data.repository.ForwardingRuleRepositoryImpl
-import com.otpforwarder.data.repository.OtpLogRepositoryImpl
+import com.otpforwarder.data.repository.ReceivedSmsRepositoryImpl
 import com.otpforwarder.data.repository.RecipientRepositoryImpl
 import com.otpforwarder.domain.repository.ForwardingRuleRepository
-import com.otpforwarder.domain.repository.OtpLogRepository
+import com.otpforwarder.domain.repository.ReceivedSmsRepository
 import com.otpforwarder.domain.repository.RecipientRepository
 import dagger.Binds
 import dagger.Module
@@ -38,7 +39,7 @@ abstract class DatabaseModule {
 
     @Binds
     @Singleton
-    abstract fun bindOtpLogRepository(impl: OtpLogRepositoryImpl): OtpLogRepository
+    abstract fun bindReceivedSmsRepository(impl: ReceivedSmsRepositoryImpl): ReceivedSmsRepository
 
     companion object {
 
@@ -50,7 +51,13 @@ abstract class DatabaseModule {
                 AppDatabase::class.java,
                 "otp_forwarder_db"
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                    MIGRATION_5_6
+                )
                 .build()
 
         @Provides
@@ -62,7 +69,7 @@ abstract class DatabaseModule {
             database.forwardingRuleDao()
 
         @Provides
-        fun provideOtpLogDao(database: AppDatabase): OtpLogDao =
-            database.otpLogDao()
+        fun provideReceivedSmsDao(database: AppDatabase): ReceivedSmsDao =
+            database.receivedSmsDao()
     }
 }
